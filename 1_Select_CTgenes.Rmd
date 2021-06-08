@@ -1,0 +1,931 @@
+---
+title: "bimodality test essai"
+output: html_notebook
+---
+
+We want to develop  new algorithm to automatically identify genes that are abnormally expressed in a subset of tumors : they are defined here as genes that have an unimodal profil of expression in normal tissues, and a bi- or multi-modal profil in tumors.
+
+For C/T genes, we add the following criteria : the mean expression in normal tissue have to be below 1 FPKM-UQ.
+
+# Intro
+## Datas
+Define the output directory
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres")
+
+pathRes="./res"
+```
+
+Load the data : 
+
+```{r}
+# SummarizedExperiment with expression data for TCGA breast samples, download from TCGA
+data_brca <- readRDS(file = "./data/data_brca.rds")
+
+#List of C/T genes, as the union of the 3 previously identified testis-specific genes
+list_CT_genes <- read.table(file = "./data/list_CT_genes.txt", 
+                            sep = "\t", header = TRUE)
+```
+
+##Functions
+This function will calculate the gaussian kernel estimation of the density for each gene in NT and in Tumors samples, and will return a list of pic(s) and values for these pics. It will also calculate if this gene is abnormally expressed in tumors, according to our criteria (multi-modality in tumors and unimodality in NT)
+
+```{r}
+# X : vector of normalized expression
+# Tum : index of tumors samples
+# Tum : index of NT samples
+
+F_derivative <- function(X, Tum, NT){
+# Two vectors of expression : normal and tumors
+  x_tum <- log2(1+ X[Tum])
+  x_nt<- log2(1+ X[NT])
+# Density for this C/T expression in NT and Tum
+  d_tum <- density(x=x_tum, kernel="gaussian", bw = bw_fix)
+  d_nt <- density(x=x_nt, kernel="gaussian", bw = bw_fix)
+
+
+# dy/dx : first derivative
+  first_tum <-diff(d_tum$y)/diff(d_tum$x)
+  first_nt <-diff(d_nt$y)/diff(d_nt$x)
+
+# to stock the sign changes of the derivative
+  #For tumors : 
+variations_tum <-c()
+for(k in 2:length(first_tum)){
+    if(sign(first_tum[k]) != sign(first_tum[k-1])){
+         variations_tum <- c(variations_tum,k)
+    }
+}
+  # For NT : 
+variations_nt <-c()
+for(k in 2:length(first_nt)){
+    if(sign(first_nt[k]) != sign(first_nt[k-1])){
+         variations_nt <- c(variations_nt,k)
+    }
+}
+
+
+  
+#Test : if the derivative sign change in tumor, but not in normal tissues => Significant
+  if (length(variations_tum)>1 & length(variations_nt) == 1) {
+    
+    return(c(list(variations_tum), list(d_tum$x[variations_tum]),
+           list(variations_nt), list(d_nt$x[variations_nt]),
+            list("sign")))
+    
+  }else(  return(c(list(variations_tum), list(d_tum$x[variations_tum]),
+           list(variations_nt), list(d_nt$x[variations_nt]),
+            list("not sign"))))
+   
+}
+```
+
+
+This function will calculate the mean expression in tumors samples and in NT samples
+```{r}
+# X : vector of normalized expression
+# Tum : index of tumors samples
+# Tum : index of NT samples
+
+F_mean <- function(X, Tum, NT){
+    mean_Tum = mean(X[Tum], na.rm = TRUE)
+    mean_NT = mean(X[NT], na.rm = TRUE)
+    return(c(mean_NT, mean_Tum))
+}
+```
+
+
+
+This function will be used in the "graphics" part
+
+```{r}
+## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summariezed
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=TRUE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm),
+          max   = max     (xx[[col]], na.rm=na.rm),
+          min   = min     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
+
+## Libraries
+```{r message=FALSE, warning=FALSE}
+library(SummarizedExperiment)
+library(dplyr)
+library(ggplot2)
+```
+
+
+
+#Iteration for C/T
+
+Firest, we need to select the index for the C/T genes in data_brca. 
+
+```{r}
+id_gene_list<- which(rownames(assay(data_brca, 2)) %in% list_CT_genes$names == TRUE)
+
+length(id_gene_list)
+```
+
+## Means
+
+We need to have the mean for the second criteria of selection
+
+```{r}
+F_mean <- function(X, Tum, NT){
+    mean_Tum = mean(X[Tum], na.rm = TRUE)
+    mean_NT = mean(X[NT], na.rm = TRUE)
+    return(c(mean_NT, mean_Tum))
+}
+
+
+```
+
+
+```{r}
+# For mean calculation : initialisation 
+# -------------------------------------
+
+# Tumors and normal tissues index
+Tum <- which(colData(data_brca)$definition != "Solid Tissue Normal")
+NT <- which(colData(data_brca)$definition == "Solid Tissue Normal")
+Subtype <- colData(data_brca)$subtype_BRCA_Subtype_PAM50
+
+# Subset of gene expression (FPKM-UQ) for CT genes only
+gene_exp <- assay(data_brca, 2)[id_gene_list, ]*10^6
+
+
+# calcul 
+# ------
+
+Table_mean <- apply(gene_exp, 1, F_mean, Tum = Tum, NT=NT ) %>% t %>% data.frame
+
+colnames(Table_mean) <- c("mean_NT", "mean_Tum")
+rownames(Table_mean) <- make.names(rowData(data_brca)[id_gene_list,"gene_id"], 
+                                  unique= T)
+
+Table_mean$Diff <- Table_mean$mean_Tum - Table_mean$mean_NT
+
+head(Table_mean)
+```
+
+
+##Derivative
+
+
+The bw parameter is important to play with the stringency of the screen : 
+
+```{r}
+# Initialisation
+bw_fix = 0.7
+
+Tum = which(colData(data_brca)$definition != "Solid Tissue Normal")
+NT = which(colData(data_brca)$definition == "Solid Tissue Normal")
+
+gene_exp <- assay(data_brca, 2)[id_gene_list, ]*10^6
+
+
+# Apply the function ! 
+res <- apply(gene_exp, 1, F_derivative, Tum = Tum, NT=NT )
+
+# Organize the output into a list column, thanks to tibble
+library(tibble)
+
+res <- enframe(res) # converts a multi-level list to tibble with list cols
+
+res$name <-  rownames(Table_mean)
+
+head(res)
+```
+
+```{r}
+library(purrr)
+# To simplify the list column into a regular column, for character (sign / not sign)
+sign_fun <- function(X){
+  X[[5]]
+}
+
+label_sig <- res %>% transmute(name, output = map_chr(value, sign_fun))
+
+head(label_sig)
+```
+```{r}
+# To simplify the list column into a regular list : indices for pics
+tum_fun <- function(X){
+  X[[1]]
+}
+
+list_variation_tum <- res %>% transmute(name, output = map(value, tum_fun))
+names(list_variation_tum$output) <- list_variation_tum$name
+list_variation_tum <- list_variation_tum$output
+
+
+head(list_variation_tum)
+```
+```{r}
+# To simplify the list column into a regular list : values for pics
+tum_fun <- function(X){
+  X[[2]]
+}
+
+max_variation_tum <- res %>% transmute(name, output = map(value, tum_fun))
+names(max_variation_tum$output) <- max_variation_tum$name
+max_variation_tum <- max_variation_tum$output
+
+
+head(max_variation_tum)
+```
+```{r}
+# To simplify the list column into a regular list : indices for pics
+nt_fun <- function(X){
+  X[[3]]
+}
+
+list_variation_nt <- res %>% transmute(name, output = map(value, nt_fun))
+names(list_variation_nt$output) <- list_variation_nt$name
+list_variation_nt <- list_variation_nt$output
+
+
+head(list_variation_nt)
+```
+```{r}
+# To simplify the list column into a regular list : values for pics
+nt_fun <- function(X){
+  X[[4]]
+}
+
+max_variation_nt <- res %>% transmute(name, output = map(value, nt_fun))
+names(max_variation_nt$output) <- max_variation_nt$name
+max_variation_nt <- max_variation_nt$output
+
+
+head(max_variation_nt)
+```
+
+
+```{r}
+
+print(paste("We have identified", sum(label_sig$output=="sign"), 
+            "multimodal TSPS bimodaux with bw =", bw_fix))
+
+
+sort(label_sig$name[which(label_sig$output=="sign")])
+
+
+```
+
+2d criteria : we want to keep only the significatives C/T genes with a mean in NT < 1
+
+```{r}
+# How many ? 
+which(Table_mean$mean_NT < 1 & label_sig$output =="sign") %>% length
+```
+```{r}
+label_sig$mean <- "Notsign_OR_NotInf_1"
+label_sig$mean[which(Table_mean$mean_NT < 1 & label_sig$output=="sign")] <- "sign_Inf1"
+
+
+head(label_sig)
+```
+
+
+# Iteration for all genes
+
+
+```{r}
+# Initialisation
+bw_fix = 0.7
+
+Tum = which(colData(data_brca)$definition != "Solid Tissue Normal")
+NT = which(colData(data_brca)$definition == "Solid Tissue Normal")
+
+gene_exp <- assay(data_brca, 2)[, ]*10^6
+
+
+# Apply the function ! 
+res <- apply(gene_exp, 1, F_derivative, Tum = Tum, NT=NT )
+
+# Organize the output into a list column, thanks to tibble
+library(tibble)
+
+res <- enframe(res) # converts a multi-level list to tibble with list cols
+
+res$name <-  rownames(gene_exp)
+
+head(res)
+```
+```{r}
+# To simplify the list column into a regular column, for character (sign / not sign)
+sign_fun <- function(X){
+  X[[5]]
+}
+
+label_sig_all <- res %>% transmute(name, output = map_chr(value, sign_fun))
+
+head(label_sig_all)
+```
+```{r}
+# To simplify the list column into a regular list : indices for pics
+tum_fun <- function(X){
+  X[[1]]
+}
+
+list_variation_tum_all <- res %>% transmute(name, output = map(value, tum_fun))
+names(list_variation_tum_all$output) <- list_variation_tum_all$name
+list_variation_tum_all <- list_variation_tum_all$output
+
+
+head(list_variation_tum_all)
+```
+
+```{r}
+print(paste("on a identifié", sum(label_sig_all$output=="sign"), 
+            "genes bimodaux avec ces paramètres, bw =", bw_fix))
+```
+
+
+```{r}
+# To simplify the list column into a regular list : values for pics
+tum_fun <- function(X){
+  X[[2]]
+}
+
+max_variation_tum_all <- res %>% transmute(name, output = map(value, tum_fun))
+names(max_variation_tum_all$output) <- max_variation_tum_all$name
+max_variation_tum_all <- max_variation_tum_all$output
+
+
+head(max_variation_tum_all)
+```
+```{r}
+# To simplify the list column into a regular list : indices for pics
+nt_fun <- function(X){
+  X[[3]]
+}
+
+list_variation_nt_all <- res %>% transmute(name, output = map(value, nt_fun))
+names(list_variation_nt_all$output) <- list_variation_nt_all$name
+list_variation_nt_all <- list_variation_nt_all$output
+
+
+head(list_variation_nt_all)
+```
+```{r}
+# To simplify the list column into a regular list : values for pics
+nt_fun <- function(X){
+  X[[4]]
+}
+
+max_variation_nt_all <- res %>% transmute(name, output = map(value, nt_fun))
+names(max_variation_nt_all$output) <- max_variation_nt_all$name
+max_variation_nt_all <- max_variation_nt_all$output
+
+
+head(max_variation_nt_all)
+```
+
+
+
+# Graphics
+
+
+##  Density curves
+
+To illustrate some specific exemples of gene expression levels distributions in normal tissues VS Tumors.
+For Figure Supp1.
+
+```{r}
+
+# Graphical parameter
+alpha = 1
+bw_fix = 0.7
+
+# Here put the name of your gene of interest
+gene = "CHMP4B"
+
+id_gene <- grep(gene, rownames(assay(data_brca, 2)))[1]
+
+Gene_exp <- assay(data_brca, 2)[id_gene, ]*10^6
+
+data=data.frame(exp=Gene_exp,
+                label = colData(data_brca)$definition,
+                Subt = Subtype)
+data$label<- as.character(data$label)
+data$label[which(data$label == "Primary solid Tumor")] = "Tum"
+data$label[which(data$label == "Metastatic")] = "Tum"
+data$label[which(data$label == "Solid Tissue Normal")] = "NT"
+
+
+#variation de la dérivée
+ d <- density(x=log2(1+data$exp[which(data$label != "NT")]), kernel="gaussian", bw = bw_fix)
+# dy/dx first derivative
+  first<-diff(d$y)/diff(d$x)
+plot(first)
+abline(h = 0, col = "red")
+
+
+g1 = ggplot(data, aes(x = log2(1+Gene_exp), fill = label, color = label))+
+ # geom_histogram(aes(y=..density..), alpha = alpha)+
+  geom_density(bw = bw_fix, alpha = alpha)+
+  scale_color_manual(values = c("orange", "grey10"))+
+  scale_fill_manual(values = c("orange", "grey10"))+
+  scale_x_continuous(limits = c(-2, 18))+
+  theme_bw()+
+  facet_grid(rows = vars(label))+
+
+  labs(title= "",x="Expression values",cex=14)+
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x = element_text(face="bold"),
+              axis.text.y=element_text(colour="black", size = 12))
+
+
+g1
+
+
+ggsave(paste(pathRes,"/",gene,"_", bw_fix, ".eps", sep=""), device=cairo_ps, g1)
+
+```
+
+
+## Heatmap
+
+To illustrate the expression pattern of the most variables selected TS genes. Supposed to be coherent with PCA. Fig Supp1 ? 
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+names_sign <- subset(label_sig, mean == "sign_Inf1")$name
+
+id_row <- which(make.names(rowData(data_brca)$gene_id, unique = T) %in% names_sign)
+
+# We take  the normalized expression value 
+dat <- assay(data_brca, 2)[id_row,]*10^6
+rownames(dat) <- make.names(rowData(data_brca)$gene_id, unique = T)[id_row]
+head(dat)[, 1:5]
+```
+
+```{r}
+# Select the most variable TS genes amoght the 139
+top_var <- which(rownames(dat) %in% c(apply(dat, 1, var) %>% sort() %>% tail(., 40) %>% names()))
+
+# we need a matrix for Heatmap function
+mt <- as.matrix(log2(1+dat[top_var,]))
+
+
+# Colors gradient
+col_fun = colorRamp2(c( 0,   max(mt)), c("white", "blue"))
+
+
+# columns annotations
+ha = HeatmapAnnotation(Type = colData(data_brca)$definition,
+                       Subtype = Subtype,
+    col = list(Type = c("Metastatic" = "red", "Primary solid Tumor" = "black", 
+                        "Solid Tissue Normal" = "white"),
+               Subtype = c("Basal" = "hotpink4", "Her2" = "cyan4", "LumA" = "darkgoldenrod", "LumB" = "orange", "Normal" = "white")))
+
+# EXpression Heatmap
+ht_list = Heatmap(as.matrix(mt),
+        top_annotation = ha,
+        cluster_rows = TRUE,
+        name = "Expression (log2)",
+        col = col_fun,
+        show_column_names = FALSE,
+        row_title = "Top variable Selected Testis-Specific Genes",
+        row_names_gp = gpar(fontsize = 7), 
+       heatmap_legend_param = list(legend_direction = "horizontal"))
+
+draw(ht_list, heatmap_legend_side = "bottom", 
+    annotation_legend_side = "right")
+```
+
+
+## Heatmap 2
+
+To illustrate the expression pattern of the most differentially ex^ressed between NT and Tumors selected TS genes. 
+
+Fig Supp1 ? 
+
+
+```{r}
+Table_mean_sign <- subset(Table_mean, rownames(Table_mean) %in% names_sign)
+
+```
+
+```{r}
+# Select the most variable TS genes amoght the 139
+top_mean <- which(rownames(dat) %in% c(Table_mean_sign[ order(Table_mean_sign$Diff),] 
+                                       %>% tail(., 15) %>% rownames))
+
+# we need a matrix for Heatmap function
+mt <- as.matrix(log2(1+dat[top_mean,]))
+
+
+# Colors gradient
+col_fun = colorRamp2(c( 0,   max(mt)), c("white", "blue"))
+
+
+# columns annotations
+ha = HeatmapAnnotation(Type = colData(data_brca)$definition,
+                       Subtype = Subtype,
+    col = list(Type = c("Metastatic" = "red", "Primary solid Tumor" = "black", 
+                        "Solid Tissue Normal" = "white"),
+               Subtype = c("Basal" = "hotpink4", "Her2" = "cyan4", "LumA" = "darkgoldenrod", "LumB" = "orange", "Normal" = "white")))
+
+# EXpression Heatmap
+ht_list = Heatmap(as.matrix(mt),
+        top_annotation = ha,
+        cluster_rows = TRUE,
+        name = "Expression (log2)",
+        col = col_fun,
+        show_column_names = FALSE,
+        row_title = "Top DeltaMean Selected Testis-Specific Genes",
+        row_names_gp = gpar(fontsize = 7), 
+       heatmap_legend_param = list(legend_direction = "horizontal"))
+
+draw(ht_list, heatmap_legend_side = "bottom", 
+    annotation_legend_side = "right")
+```
+
+
+
+
+
+```{r}
+# Select the most variable TS genes amoght the 139
+top_var <- which(rownames(dat) %in% c(apply(dat, 1, var) %>% sort() %>% tail(., 40) %>% names()))
+
+# we need a matrix for Heatmap function
+mt <- as.matrix(log2(1+dat[top_var,]))
+
+
+# Colors gradient
+col_fun = colorRamp2(c( 0,   max(mt)), c("white", "blue"))
+
+
+# columns annotations
+ha = HeatmapAnnotation(Type = colData(data_brca)$definition,
+                       Subtype = Subtype,
+    col = list(Type = c("Metastatic" = "red", "Primary solid Tumor" = "black", 
+                        "Solid Tissue Normal" = "white"),
+               Subtype = c("Basal" = "hotpink4", "Her2" = "cyan4", "LumA" = "darkgoldenrod", "LumB" = "orange", "Normal" = "white")))
+
+# EXpression Heatmap
+ht_list = Heatmap(as.matrix(mt),
+        top_annotation = ha,
+        cluster_rows = TRUE,
+        name = "Expression (log2)",
+        col = col_fun,
+        show_column_names = FALSE,
+        row_title = "Top variable Selected Testis-Specific Genes",
+        row_names_gp = gpar(fontsize = 7), 
+       heatmap_legend_param = list(legend_direction = "horizontal"))
+
+draw(ht_list, heatmap_legend_side = "bottom", 
+    annotation_legend_side = "right")
+```
+
+
+## Numer of modes and expression levels
+### CT genes
+```{r}
+alpha = 1
+
+Pic1_NT = c()
+Pic1_tum = c()
+Pic2_tum = c()
+Pic2_NT = c()
+Pic3_tum = c()
+Pic3_NT = c()
+Pic4_tum = c()
+Pic4_NT = c()
+Pic5_tum = c()
+Pic5_NT = c()
+
+
+for (i in 1:length( max_variation_nt )) {
+   Pic1_NT <- c(Pic1_NT, max_variation_nt[[i]][1]) 
+   Pic1_tum <- c(Pic1_tum, max_variation_tum[[i]][1])
+   Pic2_tum <- c(Pic2_tum, max_variation_tum[[i]][3]) 
+   Pic2_NT <- c(Pic2_NT, max_variation_nt[[i]][3]) 
+   Pic3_tum <- c(Pic3_tum, max_variation_tum[[i]][5]) 
+   Pic3_NT <- c(Pic3_NT, max_variation_nt[[i]][5]) 
+   Pic4_tum <- c(Pic4_tum, max_variation_tum[[i]][7]) 
+   Pic4_NT <- c(Pic4_NT, max_variation_nt[[i]][7]) 
+      Pic5_tum <- c(Pic5_tum, max_variation_tum[[i]][9]) 
+   Pic5_NT <- c(Pic5_NT, max_variation_nt[[i]][9]) 
+
+
+}
+
+data <- data.frame(pic = c(Pic1_NT, Pic2_NT,Pic3_NT,Pic4_NT, Pic5_NT,
+                           Pic1_tum, Pic2_tum, Pic3_tum, Pic4_tum, Pic5_tum),
+                   type = c(rep("NT", 5*length(Pic1_tum)),
+                            rep("tum", 5* length(Pic1_tum))),
+                   number = rep(c(rep("1", length(Pic1_tum)),
+                                  rep("2", length(Pic1_tum)),
+                                  rep("3", length(Pic1_tum)),
+                                  rep("4", length(Pic1_tum)),
+                                  rep("5", length(Pic1_tum))), 2),
+                   label = rep(label_sig$output,  10))
+
+tgc <- summarySE(data, measurevar="pic", groupvars=c("type","number", "label"))
+for (i in 1:ncol(tgc)) {
+  tgc[ which(is.infinite(tgc[,i])==T), i] <- NA
+
+}
+
+g3 = ggplot(data = tgc, 
+       aes(y = pic, x = number, fill = type, color = type))+
+  geom_errorbar(aes(ymin=min, ymax=max), width=.5, size = 1, linetype = 3) +
+  geom_errorbar(aes(ymin=pic-sd, ymax=pic+sd), width=0.5, size = 1, linetype = 1) +
+
+  geom_point(size = 5, shape = 18) + 
+  #coord_flip() + 
+  scale_color_manual(values = c("orange", "grey10"))+
+  scale_fill_manual(values = c("blue", "grey10"))+
+  facet_grid(rows = vars(label))+
+  theme_bw()+
+
+  labs(title= "",x="Relative maximum",cex=14)+
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x = element_text(face="bold"),
+              axis.text.y=element_text(colour="black", size = 12))
+
+
+g3
+```
+
+
+### All genes
+```{r}
+alpha = 1
+
+Pic1_NT = c()
+Pic1_tum = c()
+Pic2_tum = c()
+Pic2_NT = c()
+Pic3_tum = c()
+Pic3_NT = c()
+Pic4_tum = c()
+Pic4_NT = c()
+Pic5_tum = c()
+Pic5_NT = c()
+
+
+for (i in 1:length( max_variation_nt_all )) {
+   Pic1_NT <- c(Pic1_NT, max_variation_nt_all[[i]][1]) 
+   Pic1_tum <- c(Pic1_tum, max_variation_tum_all[[i]][1])
+   Pic2_tum <- c(Pic2_tum, max_variation_tum_all[[i]][3]) 
+   Pic2_NT <- c(Pic2_NT, max_variation_nt_all[[i]][3]) 
+   Pic3_tum <- c(Pic3_tum, max_variation_tum_all[[i]][5]) 
+   Pic3_NT <- c(Pic3_NT, max_variation_nt_all[[i]][5]) 
+   Pic4_tum <- c(Pic4_tum, max_variation_tum_all[[i]][7]) 
+   Pic4_NT <- c(Pic4_NT, max_variation_nt_all[[i]][7]) 
+      Pic5_tum <- c(Pic5_tum, max_variation_tum_all[[i]][9]) 
+   Pic5_NT <- c(Pic5_NT, max_variation_nt_all[[i]][9]) 
+
+
+}
+
+data <- data.frame(pic = c(Pic1_NT, Pic2_NT,Pic3_NT,Pic4_NT, Pic5_NT,
+                           Pic1_tum, Pic2_tum, Pic3_tum, Pic4_tum, Pic5_tum),
+                   type = c(rep("NT", 5*length(Pic1_tum)),
+                            rep("tum", 5* length(Pic1_tum))),
+                   number = rep(c(rep("1", length(Pic1_tum)),
+                                  rep("2", length(Pic1_tum)),
+                                  rep("3", length(Pic1_tum)),
+                                  rep("4", length(Pic1_tum)),
+                                  rep("5", length(Pic1_tum))), 2),
+                   label = rep(label_sig_all$output,  10))
+
+tgc <- as.data.frame(summarySE(data, measurevar="pic", groupvars=c("type","number", "label")))
+
+for (i in 1:ncol(tgc)) {
+  tgc[ which(is.infinite(tgc[,i])==T), i] <- NA
+
+}
+
+g3 = ggplot(data = tgc, 
+       aes(y = pic, x = number, fill = type, color = type))+
+  geom_errorbar(aes(ymin=min, ymax=max), width=.5, size = 1, linetype = 3) +
+  geom_errorbar(aes(ymin=pic-sd, ymax=pic+sd), width=0.5, size = 1, linetype = 1) +
+
+  geom_point(size = 5, shape = 18) + 
+  #coord_flip() + 
+  scale_color_manual(values = c("orange", "grey10"))+
+  scale_fill_manual(values = c("blue", "grey10"))+
+  facet_grid(rows = vars(label))+
+  theme_bw()+
+
+  labs(title= "",x="Relative maximum",cex=14)+
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x = element_text(face="bold"),
+              axis.text.y=element_text(colour="black", size = 12))
+
+
+g3
+
+```
+
+
+```{r}
+g3 = ggplot(data = tgc, 
+       aes(y = pic, x = number, fill = type, color = type))+
+  geom_errorbar(aes(ymin=min, ymax=max), width=.5, size = 1) +
+  geom_point(size = 3) + 
+  #coord_flip() + 
+  scale_color_manual(values = c("orange", "grey10"))+
+  scale_fill_manual(values = c("orange", "grey10"))+
+  facet_grid(rows = vars(label))+
+  theme_bw()+
+
+  labs(title= "",x="Relative maximum",cex=14)+
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x = element_text(face="bold"),
+              axis.text.y=element_text(colour="black", size = 12))
+
+
+g3
+```
+
+
+
+
+
+
+# Write tables
+```{r}
+
+#POur les all
+id_int = which(label_sig_all$output == "sign")
+
+rowData(data_brca)[id_int, 1:3]
+
+data <- data.frame(rowData(data_brca)[id_int, 1:3])
+write.table(data, paste(pathRes, "Selected_All.txt", sep = "/"), quote = F, row.names = T, col.names = T, sep = "\t")
+
+
+#pour les CT
+id_int = which(label_sig_all$output == "sign" & is.element(label_sig_all$name,
+                                                    list_CT_genes$names)==TRUE)
+data <- data.frame(rowData(data_brca)[id_int, 1:3])
+head(data)
+write.table(data, paste(pathRes, "Selected_CT.txt", sep = "/"), quote = F, row.names = T, col.names = T, sep = "\t")
+
+# Pour les CT avec critères de moyennes
+list_Mean_all <- apply(assay(data_brca, 2)[, NT]*10^6, 1, function(X){mean(X, na.rm = T)})
+
+
+id_int = which(list_Mean_all < 1 & label_sig_all$output == "sign" & is.element(label_sig_all$name,
+                                                                        list_CT_genes$names)==TRUE)
+data <- data.frame(rowData(data_brca)[id_int, 1:3])
+head(data)
+write.table(data, paste(pathRes, "Selected_CT_MeanInf1.txt", sep = "/"), quote = F, row.names = T, col.names = T, sep = "\t")
+
+
+```
+
+
+
+
+
+
+
+
+# Graphics : parameter bw
+
+To highlight the importance of bw choice : we have tested different values for bw. The number of significant genes are keept here, and used to make the following representations.
+
+```{r}
+All = c( 978, 2430, 4612, 2871, 565, 389, 655,
+         5422, 2994, 1433, 726)
+CT = c(158, 312, 447, 472, 116, 76, 193,
+       503, 325, 229, 126)
+Data = data.frame(valeurs = c(All-CT, CT),
+                  Param = rep(c(0.7, 0.5, 0.3, 0.1, 0.9, 0.99, 0.01,
+                                0.2, 0.4, 0.6, 0.8), 2),
+                  Type = c(rep("All", length(All)),
+                           rep("CT", length(CT))))
+Data$Param = as.factor(Data$Param)
+
+ggplot(data=Data, aes(x=Param, y=valeurs, fill=Type)) +
+  geom_bar(stat="identity", color = "black")+
+  scale_fill_manual(values = c("grey80", "blue"))+
+  scale_x_discrete( limits = c(0.01," ", 0.1," ", 0.2," ", 0.3," ", 0.4," ", 0.5," ", 0.6, " ",
+                                0.7, " ",0.8, " ",0.9, " ",0.99))+
+  theme_bw()+
+
+  labs(title= "",x="Expression values",cex=14)+
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x = element_text(face="bold"),
+              axis.text.y=element_text(colour="black", size = 12))
+```
+
+```{r}
+nrow(data_brca)
+nrow(list_CT_genes)
+Data = data.frame(valeurs = c((rep(nrow(data_brca), 11)-All)/nrow(data_brca),
+                              (rep(nrow(list_CT_genes),11)-CT)/nrow(list_CT_genes),
+                              All/nrow(data_brca), CT/nrow(list_CT_genes)),
+                  Select = c(rep("Unselected", 22),
+                             rep("Selected", 22)),
+                  Param = rep(c(0.7, 0.5, 0.3, 0.1, 0.9, 0.99, 0.01,
+                                0.2, 0.4, 0.6, 0.8), 4),
+                  Type = rep(c(rep("All", length(All)),
+                           rep("CT", length(CT))), 2))
+head(Data)
+Data$Param = as.factor(Data$Param)
+Data$valeurs = Data$valeurs*100
+
+
+ggplot(data=Data, aes(x="", y=valeurs, fill=Select)) +
+  geom_bar(stat="identity", color = "black")+ coord_polar("y", start=0)+
+ facet_grid(rows = vars(Type), cols = vars(Param)) +
+  scale_fill_manual(values = c("grey80", "white"))+
+  theme_bw()+
+
+  labs(title= "",x="Expression values",cex=14)+
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_blank(),
+              axis.text.y=element_text(colour="black", size = 12))
+```
+
+
+
+##Chi Test
+
+In all case, we have significantly more Testis genes selected than "all genes" selected. This result confirm previous studies showing that Testis genes are promising markers in cancer.
+```{r}
+
+All_Unsel = rep(nrow(data_brca), 11)-All
+All_Sel = All
+
+CT_Unsel = rep(nrow(list_CT_genes),11)-CT
+CT_Sel = CT
+
+res_chi = NULL
+
+for (i in 1:length(CT)) {
+  data = matrix(c(All_Unsel[i],CT_Unsel[i], All_Sel[i], CT_Sel[i]), 
+              ncol = 2) 
+  res_chi = c(res_chi, 
+              list(chisq.test(x=data)))}
+res_chi
+
+```
+
+
+
+
+
+
+
