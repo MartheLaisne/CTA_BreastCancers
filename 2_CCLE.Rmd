@@ -1,0 +1,621 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+This markdown work on CCLE data. We want to perform:
+- Differential gene expression analysis based on HORMAD1 / CT83 expression on TNBC cell lines
+- Lehmann subtype classification
+
+Row RNA-Seq data & cell lines' annotations from CCLE project were dowload on the 12/02/2020 (https://portals.broadinstitute.org/ccle/data)
+
+
+To do the lehmann classification, we used the annotation down by Lehmann et al in the princept article (2011)
+
+# Intro
+
+## Datas
+
+
+```{r}
+path_datas <- "~/Desktop/These_Marthe/1_Bioinfo/191001_GDSC2/datas/"
+
+# RNA-Seq datas
+CCLE_RNAseq_genes_counts <- read.delim(paste(path_datas, "CCLE_RNAseq_genes_counts_20180929.gct", sep = ""))
+
+# Cell lines annotations
+Cell_lines_annotations <- read.delim(paste(path_datas, "Cell_lines_annotations_20181226.txt", sep = ""))
+model_list_latest <- read.csv(paste(path_datas, "model_list_latest.csv", sep = "")) # doanload from depma
+Breast_K_subtype_PMC5665029 <- read.delim2(paste(path_datas, "Breast_K_subtype_PMC5665029.txt", sep = ""))
+Anno_Hormad_ct <- read.delim(paste(path_datas, "Anno_Hormad_ct.txt", sep = ""))
+
+# Lehmann signature
+Lehmann_signature <- read.delim(paste(path_datas, "Lehmann_signature.txt", sep = ""))
+
+```
+
+## Functions
+
+
+
+## Librairies
+
+```{r}
+library(DESeq2)
+library(dplyr)
+```
+# 0 Boxplot Hormad1 / CT83 and others CTA
+This script was usedto generated the boxplots for the fig S2D
+
+```{r}
+A = "CAGE1"
+id <- grep(A, rownames(data_brca))
+
+data <- data.frame(Exp = t(assay(data_brca[id,], 2))*10^6, 
+                         Subtype =coldata_brca_complete$subtype_BRCA_Subtype_PAM50,
+                         subtype_pathologic_stage = colData(data_brca)$subtype_pathologic_stage, 
+                          shortLetterCode = colData(data_brca)$shortLetterCode)
+colnames(data)[1] = "Exp"
+
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+g1= ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 0.5, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1, shape = 1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g1
+```
+
+
+
+# 1. Extract TNBC cell lines
+
+```{r}
+# merge the two annotation files
+Cell_lines_annotations_tot <- merge.data.frame(Cell_lines_annotations,model_list_latest, by.x = "depMapID", by.y = "BROAD_ID", all = TRUE)
+
+head(Cell_lines_annotations_tot)
+
+```
+
+## A. Extract Breast cell lines
+
+```{r}
+
+# extract breast cell lines
+Cell_lines_annotations_breast <- subset(Cell_lines_annotations_tot, cancer_type == "Breast Carcinoma") 
+dim(Cell_lines_annotations_breast)
+
+```
+
+```{r}
+#  add breast subtype info
+Cell_lines_annotations_breast$Celllines_wo_tiret <- gsub("-","", Cell_lines_annotations_breast$model_name)
+
+Cell_lines_annotations_breast <- merge(Cell_lines_annotations_breast, Breast_K_subtype_PMC5665029, 
+                                       by.x = "Celllines_wo_tiret", by.y = "Cell.lines", all.x = T)
+
+# some unknown breast statut (18) : manual completion for them
+data_inconnues <- data.frame(Cell_lines_annotations_breast$Celllines_wo_tiret, 
+                             Cell_lines_annotations_breast$Subtype)
+data_inconnues[which(is.na(data_inconnues$Cell_lines_annotations_breast.Subtype)==T),]
+```
+
+
+For inknown subtype according to CCLE data, we used publised data about breast cell lines classification to fill the NA. 
+
+```{r}
+# Complete the annotation from litterature
+
+library(dplyr)
+data_inconnues$subtype <- as.character(data_inconnues$Cell_lines_annotations_breast.Subtype)
+
+data_inconnues[which(is.na(data_inconnues$Cell_lines_annotations_breast.Subtype)==T),]$subtype <- c("TN", "L", "L", "H",
+                                                                                 "L","L","TN", "TN",
+                                                                                 "fibro", "fibro",
+                                                                                 "fibro", "fibro",
+                                                                                  "H", NA, NA,
+                                                                                 "L","H",NA)
+data_inconnues$subtype %>% as.factor %>% table
+```
+
+```{r}
+Cell_lines_annotations_breast <- merge(Cell_lines_annotations_breast, data_inconnues, 
+                                       by.x = "Celllines_wo_tiret", 
+                                       by.y = "Cell_lines_annotations_breast.Celllines_wo_tiret")
+```
+
+```{r}
+#keep gene name column + Breast cell lines
+data_counts <- CCLE_RNAseq_genes_counts[, which(colnames(CCLE_RNAseq_genes_counts) %in%
+                                          Cell_lines_annotations_breast$CCLE_ID.x)]
+rownames(data_counts) <- CCLE_RNAseq_genes_counts$Name
+
+#Rowdata
+rowtable <- CCLE_RNAseq_genes_counts[, 1:2]
+
+# Annotation subset : Sample with RNA-Seq datas:
+Cell_lines_annotations_breast <- subset(Cell_lines_annotations_breast, 
+                                           CCLE_ID.x %in% colnames(data_counts))
+
+# Order the annotation table according to the rnaseq data
+Cell_lines_annotations_breast <- Cell_lines_annotations_breast[match(colnames(data_counts),
+                                                      Cell_lines_annotations_breast$CCLE_ID.x
+                                   ),]
+
+# Verification : have we all sample, in the correct order ?
+sum(Cell_lines_annotations_breast$CCLE_ID.x == colnames(data_counts)) == ncol(data_counts)
+```
+
+
+```{r}
+dim(data_counts) # 54 Breast cell lines wit RNA-Seq data
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# ANd reciprocally: 
+Cell_lines_annotations_breast <- Cell_lines_annotations_breast[which( Cell_lines_annotations_breast$CCLE_ID.x %in% colnames(normCounts_breast)),]
+
+```
+
+
+# 1. Normalize expression
+
+To normalize, we used DESeq2. We construct the design matrix using cell lines informations (organ source)
+
+
+```{r}
+head(data_counts)
+```
+```{r}
+table(Cell_lines_annotations_breast$subtype)
+```
+
+
+Analyze : as important factor, the subtype
+
+```{r}
+library(DESeq2)
+
+# load the design file
+sampleTable <- data.frame(Samples = colnames(data_counts),
+                          subtype = Cell_lines_annotations_breast$subtype, #breast subtype 
+                          tcga_code = Cell_lines_annotations_breast$tcga_code, #organ code
+                          Pathology = Cell_lines_annotations_breast$tissue_status # Prim/Meta
+                         )
+
+
+# create a "dds" object (heart of the DESeq2 package)
+dds <- DESeqDataSetFromMatrix(countData = data_counts,
+                                  colData = sampleTable, 
+                                  rowData = rowtable,
+                                  design = ~ subtype )
+
+dds
+```
+
+```{r}
+# Omit low counts
+dds <- dds[ rowSums(counts(dds)) > 10, ]
+
+# extract counts from the dds object used by DESeq2
+counts <- counts(dds)
+
+
+# number of reads per sample
+subtype <- data.frame(subtype = Cell_lines_annotations_breast$subtype)
+subtype <- mutate(subtype, col_sob = ifelse(subtype == "H", "cyan2",
+                                            ifelse(subtype == "TNA", "pink4",
+                                            ifelse(subtype == "TNB", "purple",
+                                            ifelse(subtype == "TN", "pink",
+                                            ifelse(subtype == "LA", "yellow",
+                                            ifelse(subtype == "LB", "orange",
+                                            ifelse(subtype == "fibro", "red", "black"))))))))
+
+barplot(colSums(counts),col = subtype$col_sob) 
+# normalization
+dds <- estimateSizeFactors(dds)
+
+```
+
+Warning : A factor 10 in the sequencing depth... 
+
+
+```{r}
+# effect of the normalization
+normCounts <- counts(dds, normalized=TRUE)
+par(mfrow=c(1,2))
+boxplot(log2(counts+1), main="Raw counts",col = subtype$col_sob)
+boxplot(log2(normCounts+1), main="Normalized counts",col = subtype$col_sob)
+```
+
+One exemple of exploratory analysis: estimate dispersion and PCA with projection of breast cancer subtype. 
+We can observe the good segregation in the space of TN vs Luminal/HER.
+
+```{r}
+# dispersions estimation
+dds <- estimateDispersions(dds)
+# Principal Component Analysis (PCA) plot
+res.vst <- vst(dds)
+plotPCA(res.vst, intgroup="subtype")
+```
+
+Annotate the NormCount dataframe : 
+```{r}
+# Normalized RNA-Seq datas for these  samples
+
+normCounts <- counts(dds, normalized=TRUE)
+normCounts <- as.data.frame(normCounts)
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+# Ensembl keys
+normCounts$ENS <- sub("\\..*", "", rownames(normCounts)) #omit the ".NUMBER"
+
+# Gene Symbol keys
+normCounts$symbol <- mapIds(org.Hs.eg.db,
+                     keys=normCounts$ENS,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+head(normCounts)
+```
+
+## B. Extract TNBC cell lines
+We can now select the TNBC cell lines : 
+
+```{r}
+id_TN <- which(Cell_lines_annotations_breast$subtype %in% c("TN", "TNA", "TNB"))
+
+Cell_lines_annotations_TN <- Cell_lines_annotations_breast[id_TN, ]
+
+TN_normCounts <- normCounts[, c(ncol(normCounts), ncol(normCounts)-1, #gene name
+                                                       which(colnames(normCounts) %in% Cell_lines_annotations_TN$CCLE_ID.x))]
+
+dim(TN_normCounts) # 23 TNBC cell lines wit RNA-Seq data
+```
+
+```{r}
+# Verification
+Cell_lines_annotations_TN$CCLE_ID.x %>% as.character() %in% colnames(TN_normCounts) %>% sum()
+
+```
+
+
+# 3. Classify according to Lehmann Subtype
+
+First we can extract the HORMAD1-positive / CT83-positive cell lines
+
+## Biplot of expression for Breast
+
+```{r}
+normCounts_breast <- data.frame(normCounts)
+
+id_HORMAD <- grep("HORMAD1", normCounts_breast$symbol)
+id_CT83 <- grep("CT83", normCounts_breast$symbol)
+
+# Vectir if expression for our two genes
+XP_HORMAD1 <- unlist(normCounts_breast[id_HORMAD,1:c(ncol(normCounts_breast)-2)])
+XP_CT83 <- unlist(normCounts_breast[id_CT83,1:c(ncol(normCounts_breast)-2)])
+
+library(ggrepel)
+ggplot(data = data.frame(CT83 = log2(1+XP_CT83),
+                         HORMAD1 = log2(1+XP_HORMAD1),
+                         Subtype = Cell_lines_annotations_breast$subtype, 
+                         label = Cell_lines_annotations_breast$model_name) ,
+       aes(y = (CT83), x = (HORMAD1), color = Subtype, label = label))+
+ # geom_text_repel()+
+  geom_jitter(size = 5, shape = 1)+
+  geom_vline(xintercept = log2(100) )+
+  geom_hline(yintercept = log2(100))+
+  
+  scale_color_manual(values=c("red","cyan4", "orange", "goldenrod", "orange1", "hotpink3", 
+                              "pink4", "purple3"))+
+  
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+
+```
+```{r}
+ggplot(data = data.frame(CT83 = log2(1+XP_CT83),
+                         HORMAD1 = log2(1+XP_HORMAD1),
+                         Subtype = Cell_lines_annotations_breast$subtype, 
+                         label = Cell_lines_annotations_breast$model_name) ,
+       aes(y = (CT83), x = Subtype, color = Subtype, label = label))+
+  geom_boxplot(notch = F)+
+  geom_point()+
+  
+  scale_color_manual(values=c("red","cyan4", "orange", "goldenrod", "orange1", "hotpink3", 
+                              "pink4", "purple3"))+
+  
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+
+# 4. Lehmann classifi
+From the article : 
+
+```{r}
+Le <- c("unknown", "M", "M", "LAR", "M", "BL2", "IM", "BL1", "IM", "unknown", "BL1", "BL2",
+        "BL1", "BL1", "BL1", "BL1", "BL2", "unknown", "MSL", "MSL", "MSL", "MSL","BL1")
+```
+
+```{r}
+lab <- rep(NA, length(XP_CT83[id_TN]))
+lab[which(XP_CT83[id_TN] > 15 & XP_HORMAD1[id_TN] > 15)] <- "Both_On"
+lab[which(XP_CT83[id_TN] <= 15 & XP_HORMAD1[id_TN] <= 15)] <- "Both_Off"
+lab[which(XP_CT83[id_TN] > 15 & XP_HORMAD1[id_TN] <= 15)] <- "CT83"
+lab[which(XP_CT83[id_TN] <= 15 & XP_HORMAD1[id_TN] > 15)] <- "HORMAD1"
+
+table(lab)
+```
+
+
+```{r}
+Lab2_TN <- c("Both_Off", "Both_Off", "Both_Off", "Both_Off",
+             "Both_Off", "HORMAD1", "Both_Off", "Both_On", 
+             "Both_Off", "Both_On", "Both_On", "CT83",
+             "Both_On", "CT83", "Both_On", "Both_On",
+             "HORMAD1", "Both_Off", "Both_Off", "HORMAD1",
+             "CT83", "Both_On", "CT83")
+```
+
+
+```{r}
+ggplot(data = data.frame(CT83 = XP_CT83[id_TN],
+                         HORMAD1 = XP_HORMAD1[id_TN],
+                         Subtype = Le, 
+                         label = Cell_lines_annotations_breast$model_name[id_TN]) ,
+       aes(y = log2(1+CT83), x = log2(1+HORMAD1), color = Subtype, label = label))+
+  geom_text_repel()+
+  geom_point(size = 3, shape =1 ) +
+  geom_vline(xintercept = log2(20) )+
+  geom_hline(yintercept = log2(20))+
+  
+  scale_color_manual(values=c( "orange",  "red", "navy", "cyan3", "green4","chartreuse3", "grey"))+
+  
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# 5. DEG
+
+
+We want to do the differential gene expression between HORMAD1 & CT83 - positive TNBC cell lines, and HORMAD1 & CT83 - negative TNBC cell lines.
+
+Unsolved problem : Should we take all H+CT positive cell lines, regardless of the variability in the expression levels, or only the top-seven versus the five negative TNBC?  Will be more coherent with GDSC2 data also....
+
+First try : we keep everybody.
+
+```{r}
+# load the design file
+sampleTable <- data.frame(Samples = colnames(data_counts)[id_TN],
+                          subtype = Cell_lines_annotations_breast$subtype[id_TN], #organ 
+                          tcga_code = Cell_lines_annotations_breast$tcga_code[id_TN], #organ code
+                          Pathology = Cell_lines_annotations_breast$tissue_status[id_TN], # Prim/Meta
+                          lab = Lab2_TN,
+                          Le = Le
+                         )
+
+
+# create a "dds" object (heart of the DESeq2 package)
+dds <- DESeqDataSetFromMatrix(countData = data_counts[,id_TN],
+                                  colData = sampleTable, 
+                                  rowData = rowtable,
+                                  design = ~ lab )
+
+dds
+```
+
+
+```{r}
+
+
+# Omit low counts
+dds <- dds[ rowSums(counts(dds)) > 10, ]
+
+# extract counts from the dds object used by DESeq2
+counts <- counts(dds)
+# number of reads per sample
+# number of reads per sample
+lab_c <- data.frame(lab = sampleTable$lab)
+lab_c <- mutate(lab_c, col_sob = ifelse(lab == "Both_Off", "grey",
+                                            ifelse(lab == "Both_On", "black",
+                                            ifelse(lab == "HORMAD1", "orange",
+                                            ifelse(lab == "CT83", "cyan4", "black")))))
+barplot(colSums(counts), col = lab_c$col_sob)
+# normalization
+dds <- estimateSizeFactors(dds)
+```
+
+No major biais in sequencing depth between positive and negative cell lines. 
+
+
+```{r}
+# dispersions estimation
+dds <- estimateDispersions(dds)
+# Principal Component Analysis (PCA) plot
+res.vst <- vst(dds)
+plotPCA(res.vst, intgroup="lab")
+```
+
+In PCA, the variability is not explained by the On vs Off. 
+
+```{r}
+plotPCA(res.vst, intgroup="Le")
+
+```
+
+However, we can quite well segregate cell lines according to Lehmann's subtypes: BL1 - 2 from M - MSL.
+
+
+```{r}
+
+#statistical modeling and testing
+dds <- nbinomWaldTest(dds)
+res.DESeq2_ON_OFF <- results(dds,
+                      contrast=c("lab","Both_On","Both_Off"), alpha=0.05, pAdjustMethod="BH")
+
+summary(res.DESeq2_ON_OFF, alpha=0.05)
+
+
+```
+```{r}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+res.DESeq2_ON_OFF$ENS <- sub("\\..*", "", rownames(res.DESeq2_ON_OFF)) #omit the ".NUMBER"
+res.DESeq2_ON_OFF$symbol <- mapIds(org.Hs.eg.db,
+                     keys=res.DESeq2_ON_OFF$ENS,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+
+
+
+
+
+```{r}
+# reorder
+res.DESeq2_ON_OFF <- res.DESeq2_ON_OFF[order(res.DESeq2_ON_OFF$pvalue),]
+head(res.DESeq2_ON_OFF, 200) %>% data.frame
+```
+
+```{r}
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+# It's a generic method
+A = "ON vs OFF, GDSC2 def"
+data = data.frame(res.DESeq2_ON_OFF)
+
+# Specific genes that you want to highlight
+int_TSPS = c("HORMAD1", "CT83")
+int_diff_neg = data[which(data$padj < 0.05
+                                    & data$log2FoldChange < 0),c( 8)]
+int_diff_pos = data[which(data$padj < 0.05 & 
+                                data$log2FoldChange > 0),c( 8)]
+
+id_sign = which(data$padj <0.05)
+id_TSPS = which(is.element(data$symbol, int_TSPS)==TRUE)
+id_label_diff_pos = which(is.element(data$symbol, int_diff_pos)==TRUE)
+id_label_diff_neg = which(is.element(data$symbol, int_diff_neg)==TRUE)
+
+g1 = ggplot(data,
+       aes(y = -log10(padj), x = log2FoldChange, label = symbol ))+
+  geom_point(data = data[-c(id_sign, id_TSPS ),], color = "grey") +
+  geom_point(data = data[id_sign,], aes(color = log2(1+baseMean)))+
+  geom_point(data = data[id_TSPS,], color = "goldenrod3")+
+  
+  geom_text_repel(data = data[id_TSPS,], color="goldenrod3", aes(label=symbol), 
+                  nudge_y = 0.5,direction    = "both",vjust= 0, segment.size = 0.2)+
+ # scale_x_continuous(limits = c(-10,10))+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black")+
+  labs(title=A, y="Adjusted P-value (-log10)",x="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 10,hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+g1
+```
+
+```{r}
+library(plotly)
+
+ggplotly(g1)
+```
+
+
+
+```{r}
+write.table(data, "DEA_TNBC_ON_vs_OFF_GDSC2def.txt", sep = "\t", row.names = F, quote=F)
+```
+
+
+
+
+```{r}
+id1 <- grep("MAGEA4", TN_normCounts$symbol)
+
+boxplot(log2(1+unlist(TN_normCounts[id1[1],-c(1:2)])) ~ Lab2_TN)
+```
+
+For GSEA downstream analysis : 
+
+```{r}
+tab = data.frame(data$symbol[order(data$log2FoldChange)],
+                 data$log2FoldChange[order(data$log2FoldChange)]*(-log10(data$padj[order(data$log2FoldChange)])))
+
+tab <- na.omit(tab)
+colnames(tab) = c("Symbol", "Fold-Change")
+write.table(tab, "DEA_TNBC_ON_vs_OFF_padj_GDSC2.rnk", quote = F, row.names = F, col.names = F, sep = "\t")
+```
+
+```{r}
+id_signif <- which(data$padj < 0.05)
+data_signif <- data[id_signif, ]
+
+tab = data.frame(data_signif$symbol[order(data_signif$log2FoldChange)],
+                 data_signif$log2FoldChange[order(data_signif$log2FoldChange)])
+colnames(tab) = c("Symbol", "Fold-Change")
+write.table(tab, "DEA_TNBC_ON_vs_OFF_signif_GDSC2.rnk", quote = F, row.names = F, col.names = F, sep = "\t")
+```
+
+
+
