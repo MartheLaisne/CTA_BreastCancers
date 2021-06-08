@@ -1,0 +1,349 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Intro
+
+We want to clusterize tumors according to the 139 selected testis gene expression. To do so, we will do a principal component analysis, using as supplementary variables the ColData. 
+
+## Data
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres")
+
+pathRes="./res"
+```
+
+
+
+```{r}
+Selected_CT <- read.delim("./data/Selected_CT_MeanInf1.txt", 
+                            sep = "\t", header = TRUE)
+
+# SummarizedExperiment with expression data for TCGA breast samples, download from TCGA
+data_brca <- readRDS(file = "./data/data_brca.rds")
+
+```
+
+
+## Libraries
+
+```{r message=FALSE, warning=FALSE}
+library(FactoMineR)
+library(factoextra)
+library(dplyr)
+library(tidyverse)
+library(gridExtra)
+
+library(SummarizedExperiment)
+
+library(ComplexHeatmap)
+library(circlize)
+
+```
+
+
+# I. PCA
+
+Select the data : 139 Testis specific gene expression
+
+```{r}
+id <- which( is.element(rownames(data_brca), rownames(Selected_CT))==TRUE)
+length(id)
+
+data.active <- data.frame(t(assay(data_brca[id,], 2))*10^6)
+
+# Log scale the data
+data.active <- data.active %>% (function(X){log2(X+1)})
+
+head(data.active[, 1:5])
+```
+
+
+Select the supplementary variables (they will not contribute to the PCs, but they will be correlated with them)
+
+```{r}
+data.supp <- colData(data_brca) %>% as.data.frame()
+
+head(data.supp)
+```
+Select quantitative and qualitative supplementary variables : 
+```{r}
+id_quali <- which(summary(data.supp)[2, ]=="Class :character  ")
+
+id_quanti <- setdiff(1:ncol(data.supp), id_quali)
+
+#Transform character vector to factors : 
+data.supp[, id_quali] <- lapply(data.supp[,id_quali], factor )
+head(data.supp)
+```
+
+```{r}
+# Add Normal Tissue information (instead of NA) to the subtype variable : 
+data.supp$subtype_BRCA_Subtype_PAM50 = as.character(data.supp$subtype_BRCA_Subtype_PAM50)
+data.supp$subtype_BRCA_Subtype_PAM50[which(data.supp$shortLetterCode=="NT")] = "NT"
+data.supp$subtype_BRCA_Subtype_PAM50 = as.factor(data.supp$subtype_BRCA_Subtype_PAM50)
+
+```
+
+Set the data to the PCA & run it: 
+```{r}
+#Remove quantitative supplementary variables : 
+data.tot <- cbind(data.active, data.supp[,-id_quanti])
+
+
+res.pca.norm <- PCA(data.tot[, ], scale.unit = F, ncp = 50, graph = TRUE,
+               quali.sup = c(1+ncol(data.active)):ncol(data.tot) )
+```
+
+Variance explained by the 20 first components : 
+```{r}
+fviz_eig(res.pca.norm, addlabels = TRUE, ylim = c(0, 50),  barfill = "grey", barcolor = "black", ncp = 20)+
+  labs(title= "Variance Explained ", 
+       y="Percentage of explained variances (%)",x="Dimension",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+
+Variable contribution to the 2 first components : 
+```{r}
+fviz_contrib(res.pca.norm, choice = "var", axes = 1:2, fill = "grey",
+  color = "black", top = 11)+
+  labs(title= "Contribution of variables to Dim 1-2 ", 
+       y="Constributions (%)",x="",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+```{r}
+# We will represent on the graph the Top10 variable contributing to the PC1 and PC2
+# To divide by the number considered component, here 2:
+div2 = function(X){X/2}
+
+# TO pondere each component by the % of variability explained : 
+poids <- res.pca.norm$eig[1:2, 2] / 100
+pondere <- function(X){X*poids}
+
+# Top 10 (same than with the embedied graphical function fviz_contrib)
+name <- list(name = res.pca.norm$var$contrib[, 1:2] %>% pondere %>% rowSums %>% div2 %>% sort(.,decreasing = T) %>%  head(.,10) %>% names)
+
+fviz_pca_biplot (res.pca.norm, axes = c(1, 2),
+                 col.var = "black",
+              col.ind = data.tot$subtype_BRCA_Subtype_PAM50,
+              select.var = name, repel = TRUE,
+                
+              geom.ind  = c("point"), geom.var = c("arrow", "text"),
+              pointsize = "cos2",  #palette = "jco", 
+              pointshape = 21
+             ) +
+ scale_color_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  theme_classic()
+```
+
+## UMAP 
+Option for the representation of PCA (but we can't have the variable on the same graph)
+
+```{r}
+library(umap)
+
+# Create Seurat object
+custome.config <- umap.defaults
+custome.config$n_neighbors = 250
+custome.config$n_epochs = 500
+custome.config$n_components = 2
+
+dataUMAP <- umap(data.active,
+                 custome.config)
+
+dataGG <- data.frame(dataUMAP$layout)
+ggplot(data = dataGG,
+       aes ( x = X1,y =X2,
+             color = data.tot$subtype_BRCA_Subtype_PAM50))+
+  geom_point(size = 3, shape = 1)+
+ scale_color_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "grey70"))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+# II. Boxplot 
+
+This part allow you to automatically draw boxplot of a given gene (here, HORMAD1 and CT83 / CXorf61) according to the tumor subtype. 
+
+```{r}
+A = "MAGEA8"
+id <- grep(A, rownames(data_brca))
+
+data <- data.frame(Exp = t(assay(data_brca[id,], 2))*10^6, 
+                         Subtype = colData(data_brca)$subtype_BRCA_Subtype_PAM50,
+                         subtype_pathologic_stage = colData(data_brca)$subtype_pathologic_stage, 
+                          shortLetterCode = colData(data_brca)$shortLetterCode)
+colnames(data)[1] = "Exp"
+
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+unlist(summary(aov(formula = Exp~Subtype, data = data)))[9]
+
+g1= ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 0.5, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1, shape = 1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g1
+```
+
+```{r}
+A = "CXorf61"
+id <- grep(A, rownames(data_brca))
+
+data <- data.frame(Exp = t(assay(data_brca[id,], 2))*10^6, 
+                         Subtype = colData(data_brca)$subtype_BRCA_Subtype_PAM50,
+                         subtype_pathologic_stage = colData(data_brca)$subtype_pathologic_stage, 
+                          shortLetterCode = colData(data_brca)$shortLetterCode)
+colnames(data)[1] = "Exp"
+
+#Nommer les NT
+data$Subtype = as.character(data$Subtype)
+data$Subtype[which(colData(data_brca)$shortLetterCode == "NT")] = "NT"
+data$Subtype = as.factor(data$Subtype)
+
+unlist(summary(aov(formula = Exp~Subtype, data = data)))[9]
+
+g2= ggplot(data = data, aes(x = Subtype, y = Exp+1, fill = Subtype, color = Subtype))+
+  geom_boxplot(notch = TRUE, size = 0.5, outlier.colour = "white", color = "black")+
+  geom_jitter( width = 0.1, shape = 1)+
+  coord_trans(y="log2")+
+  scale_x_discrete(limits= c("NT", "LumA", "LumB", "Her2", "Basal", "Normal") )+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink3","cyan3","goldenrod2", "orange1", "grey70", "grey80"))+
+  labs(title=paste(A), x="Subtype",y="FPKM-UQ")+                         
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12, face = "bold",hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g2
+```
+```{r}
+grid.arrange(g1, g2, ncol = 2)
+```
+
+# III. Biplot
+
+This part will draw biplot of expression data of HORMAD1 vs. CT83 : 
+1. in the all dataset
+2. In the basal tumor subtype, afetr characterization of the ON / OFF statut of both genes. A testis-gene is considered as "ON" if the expression level in a given tumor tissue is above mean+3sd the expression level in normal tissues.
+
+```{r}
+id_gene <- c(grep("HORMAD1",rownames(data_brca) ),
+             grep("CXorf61",rownames(data_brca) ))
+data <- assay(data_brca, 2)[id_gene, ] %>% t %>% data.frame
+data <- data*10^6
+colnames(data) <- c("Hormad1", "CT83")
+data$type <- data.tot$subtype_BRCA_Subtype_PAM50
+
+# On 
+data <- data[order(rownames(data)),]
+
+library(ggplot2)
+
+ggplot(data = data, aes(x = log2(1+Hormad1), y = log2(1+CT83), fill = type, color = type ))+
+  geom_point(size = 3, shape = 21, color = "black", na.rm = T) + 
+  geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+Compute the ON/ OFF statut
+
+```{r}
+id_NT <- which(data$type == "NT")
+
+Hormad_CT83_ON <- which(data$Hormad1 > c(mean(data$Hormad1[id_NT])+3*sd(data$Hormad1[id_NT])) & 
+                     data$CT83 > c(mean(data$CT83[id_NT])+3*sd(data$CT83[id_NT]))&
+                     data$type == "Basal")
+
+Hormad_ON <- which(data$Hormad1 > c(mean(data$Hormad1[id_NT])+3*sd(data$Hormad1[id_NT])) & 
+                     data$CT83 <= c(mean(data$CT83[id_NT])+3*sd(data$CT83[id_NT]))&
+                     data$type == "Basal")
+
+CT83_ON <- which(data$Hormad1 <= c(mean(data$Hormad1[id_NT])+3*sd(data$Hormad1[id_NT])) & 
+                     data$CT83 > c(mean(data$CT83[id_NT])+3*sd(data$CT83[id_NT]))&
+                     data$type == "Basal")
+
+Both_OFF <- which(data$Hormad1 <= c(mean(data$Hormad1[id_NT])+3*sd(data$Hormad1[id_NT])) & 
+                     data$CT83 <= c(mean(data$CT83[id_NT])+3*sd(data$CT83[id_NT]))&
+                     data$type == "Basal")
+
+Infos <- data.frame(Index = c(Hormad_CT83_ON, Hormad_ON , CT83_ON, Both_OFF),
+                    Type = c(rep("Hormad_CT83_ON", length(Hormad_CT83_ON)),
+                             rep("Hormad_ON", length(Hormad_ON)),
+                             rep("CT83_ON", length(CT83_ON)),
+                             rep("Both_OFF", length(Both_OFF))))
+
+
+
+table(Infos$Type)
+```
+
+
+Select basal tumors : 
+```{r}
+ggplot(data = data[Infos$Index,], aes(x = log2(1+Hormad1), y = log2(1+CT83),
+                                      fill = type, color = type ,
+                                      shape = Infos$Type ))+
+  geom_point(size = 3, color  = "black") + 
+  geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+
+  scale_fill_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_color_manual(values=c("hotpink4","darkcyan","goldenrod3", "orange3", "grey50", "white"))+
+  scale_shape_manual(values = c(21, 22, 23, 24))+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+
+

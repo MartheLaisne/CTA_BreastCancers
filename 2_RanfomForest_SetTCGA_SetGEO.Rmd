@@ -1,0 +1,747 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Some tuto : 
+http://mehdikhaneboubi.free.fr/random_forest_r.html ****
+https://thinkr.fr/premiers-pas-en-machine-learning-avec-r-volume-4-random-forest/
+https://lovelyanalytics.com/2017/08/29/random-forest-tutoriel-r/
+
+
+We want to prioritize the 139 Testis-specific genes identified, to select the few ones that could be really usefull as biomarker for breast tumors and, maybe, as target.
+
+To do so, we want to know which Testis-specific genes are good markers of specific breast cancer subtypes. We develop random forest model to predict breast cancer subtype based on 139 selected testis-specific genes expression.
+
+
+
+
+# Intro
+## Datas
+Define the output directory
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres")
+
+pathRes="./res"
+```
+
+Load the data : 
+
+```{r}
+# SummarizedExperiment with expression data for TCGA breast samples, download from TCGA
+data_brca <- readRDS(file = "./data/data_brca.rds")
+
+#List of C/T genes, as the union of the 3 previously identified testis-specific genes
+list_CT_genes <- read.table(file = "./data/Selected_CT_MeanInf1.txt", 
+                            sep = "\t", header = TRUE)
+head(list_CT_genes)
+```
+
+
+
+##Librairies
+```{r  message=FALSE, warning=FALSE}
+library(dplyr)
+library(SummarizedExperiment)
+
+library(randomForest)
+library(caret)
+
+library(ROCR)
+library(klaR)
+library(pROC)
+
+library(parallel)
+library(doParallel)
+
+```
+
+
+#1. TCGA data
+
+## Organize dataset
+```{r}
+# Select index corresponding to the 139 selected CT genes
+index_CT <- which(rownames(data_brca) %in% rownames(list_CT_genes))
+length(index_CT)
+```
+
+```{r}
+# Select the outcome variable : Subtype
+output_subtype <- colData(data_brca)$subtype_BRCA_Subtype_PAM50
+
+# Add "normal tissu information"
+output_subtype[which(colData(data_brca)$shortLetterCode=="NT")] = "NT"
+
+# remove NA
+id_rm <- which(is.na(output_subtype)==T)
+output_subtype = output_subtype[-id_rm]
+
+table(output_subtype) 
+
+is.na(output_subtype) %>% sum
+```
+
+```{r}
+# For the variation B, analyze only tumor samples
+id_tum <- which(output_subtype != "NT")
+
+# Select subset for gene expression correspondong to cormalize expression value for the 139 selected genes
+data <- data.frame(output_subtype = output_subtype[id_tum])
+
+data <- cbind(data,
+              t(assay(data_brca, 2)[index_CT, -id_rm][, id_tum]*10^6))
+
+# Remove duplicated colnames
+colnames(data) <- make.names(colnames(data), unique = TRUE)
+
+head(data[, 1:5])
+```
+## Model
+
+In randomeForest() have tuneRF() for searching best optimal mtry values given for your data. (mtry : minimal number of variables necessary to obtain the best prediction)
+
+We will depend on OOBError to define the most accurate mtry for our model which have the least OOBEError.
+
+Out-Of-Bag : number of individus that are misclassify based on the model
+
+```{r}
+set.seed(1)
+x <- data[, -1]
+y <- data$output_subtype
+bestMtry <- tuneRF(x,y, stepFactor = 1.5, improve = 1e-5, ntree = 500)
+
+print(bestMtry)
+
+```
+
+=> Best mtry : 16. We are supposed to have something similar after Caret Optimization. 
+
+```{r}
+# Fractionate data
+train <- data %>% sample_frac(0.75)
+test <- anti_join(data, train)
+
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(31)
+
+# Set up the parameter for learning
+fitControl <- trainControl(verboseIter = T,
+                           method = "repeatedcv", #Manual search by create 10 folds and repeat 3 times
+                           allowParallel = TRUE,
+                           classProbs = TRUE,
+
+                           number=10, 
+                           repeats=3)
+
+
+# Construct the model on the training dataset (80% of the initial individus)
+mod_139TS <- train(output_subtype ~ ., data = train, 
+                    method = "rf",
+                    metric = 'Accuracy',
+                    ntree = 500,
+                   tuneLength  = 15,
+                   trControl = fitControl, 
+                   na.action = na.omit
+                  )
+print(mod_139TS)
+
+
+getTrainPerf(mod_139TS)
+plot(varImp(mod_139TS), top = 15)
+
+```
+
+We can see the increase of the accuracy with the number of predictors. We found something very similar to previous result : best mtry around 16. 
+
+```{r}
+plot(mod_139TS)
+
+```
+
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+```{r}
+mod_139TS
+mod_139TS$resample
+```
+
+=> The final model use mtry = 31
+
+We can see in the final model the accuracy of the prediction, and the number of mis-assignated individu par category : 
+```{r}
+print(mod_139TS$finalModel)
+
+library(ComplexHeatmap)
+library(circlize)
+
+col_fun = colorRamp2(c( 0, 50, 100), c("black","white", "red"))
+
+nobre_col <- c(ncol(mod_139TS$finalModel$confusion)-1)
+
+
+as.matrix(mod_139TS$finalModel$confusion[, 1:nobre_col] / rowSums(mod_139TS$finalModel$confusion[, 1:nobre_col]) *100) %>%
+  Heatmap(., col = col_fun, 
+          rect_gp = gpar(col = "black", lwd = 0.1),
+          cluster_rows = F, cluster_columns = F,
+          name = "% assignated", column_title = "Confusion Matrix",
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", t(mod_139TS$finalModel$confusion[, 1:nobre_col] / rowSums(mod_139TS$finalModel$confusion[, 1:nobre_col]) *100)[i, j]), x, y, gp = gpar(fontsize = 10))
+})
+```
+=> The model perform very well to identify Basal and normal tissues.
+The other cancer types are really often caracterize as Luminal A, regardless of their actual subtype. 
+
+
+We verify that the number of trees choosen allow the convergence of the model : with 500 tress, it's more than ok. 
+```{r}
+plot(mod_139TS$finalModel$err.rate[, 1], type = "l", xlab = "nombre d'arbres", ylab = "erreur OOB")
+```
+
+
+```{r}
+hist(mod_139TS$finalModel$oob.times)
+```
+
+We can test the model on the remaining individus (20% of the initial data set)
+
+```{r}
+test$predicted <- predict(mod_139TS, test)
+conf <- confusionMatrix(data = test$predicted, reference = test$output_subtype)
+
+conf$byClass
+
+prediction <- predict(mod_139TS, test,type='prob')
+
+```
+=> the model is really sensitytive and specific for basal breast tumor, with high accuracy (respectively 0.94 and 0.89).
+
+For LUminal A, the model is really sensitive but lowly specific : it often misclassify non-luminal A tumor as luminal A. It's coherent with the confusion matrix observed earlier. Total accuracy : 0.80
+
+For the others categories, the model perform poorly, with a really low sensitivity and a bad accuracy (0.5)
+
+```{r}
+library(ComplexHeatmap)
+col_fun = colorRamp2(c( 0, 0.5, 0.75,1), c("grey10","white", "red","firebrick4"))
+
+conf$byClass[,c(1:2,11)] %>% t %>%
+  Heatmap(., col = col_fun, name = "% asignated", column_title = "Confusion Matrix",
+          cluster_rows = F, border = TRUE,  rect_gp = gpar(col = "black", lwd = 0.1),
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", t(conf$byClass[,c(1:2,11)])[i, j]), x, y, gp = gpar(fontsize = 10))
+})
+```
+
+## Variable importance
+
+```{r}
+varImp(mod_139TS)
+plot(varImp(mod_139TS), top = 15)
+```
+
+
+# 1B. TCGA with anapath
+```{r}
+coldata_brca_complete <- readRDS(file = "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190510_Breast_CaracterisationHormadCT83/coldata_brca_complete.rds")
+
+coldata_brca_complete <- coldata_brca_complete[match(colnames(data_brca), coldata_brca_complete$barcode),]
+
+head(coldata_brca_complete)
+```
+
+## Organize dataset
+```{r}
+# Select index corresponding to the 139 selected CT genes
+index_CT <- which(rownames(data_brca) %in% rownames(list_CT_genes))
+length(index_CT)
+```
+
+```{r}
+# Select the outcome variable : Subtype
+output_subtype <- coldata_brca_complete$Diagno_patho
+
+# Add "normal tissu information"
+output_subtype[which(colData(data_brca)$shortLetterCode=="NT")] = "NT"
+
+#Remove Her2-equ
+data$output_subtype <- data$output_subtype %>% as.character
+output_subtype[which(output_subtype =="ER/PR")] = "ER_PR"
+output_subtype[which(output_subtype =="HER2-amp")] = "HER2"
+
+output_subtype[which(output_subtype =="HER2-equivocal")] = "ER_PR"
+
+
+data$output_subtype <- data$output_subtype %>% as.factor
+
+# remove NA
+id_rm <- which(is.na(output_subtype)==T)
+output_subtype = output_subtype[-id_rm]
+
+table(output_subtype) 
+
+is.na(output_subtype) %>% sum
+```
+
+```{r}
+# For the variation B, analyze only tumor samples
+id_tum <- which(output_subtype != "NT")
+
+# Select subset for gene expression correspondong to cormalize expression value for the 139 selected genes
+data <- data.frame(output_subtype = output_subtype[id_tum])
+
+data <- cbind(data,
+              t(assay(data_brca, 2)[index_CT, -id_rm][, id_tum]*10^6))
+
+# Remove duplicated colnames
+colnames(data) <- make.names(colnames(data), unique = TRUE)
+
+head(data[, 1:5])
+```
+## Model
+
+In randomeForest() have tuneRF() for searching best optimal mtry values given for your data. (mtry : minimal number of variables necessary to obtain the best prediction)
+
+We will depend on OOBError to define the most accurate mtry for our model which have the least OOBEError.
+
+Out-Of-Bag : number of individus that are misclassify based on the model
+
+```{r}
+set.seed(1)
+x <- data[, -1]
+y <- data$output_subtype
+bestMtry <- tuneRF(x,y, stepFactor = 1.5, improve = 1e-5, ntree = 500)
+
+print(bestMtry)
+
+```
+
+=> Best mtry : 16. We are supposed to have something similar after Caret Optimization. 
+
+```{r}
+# Fractionate data
+train <- data %>% sample_frac(0.75)
+test <- anti_join(data, train)
+
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(95014)
+
+# Set up the parameter for learning
+fitControl <- trainControl(verboseIter = T,
+                           method = "repeatedcv", #Manual search by create 10 folds and repeat 3 times
+                           allowParallel = TRUE,
+                           classProbs = TRUE,
+
+                           number=10, 
+                           repeats=3)
+
+
+# Construct the model on the training dataset (80% of the initial individus)
+mod_139TS_Anapath <- train(output_subtype ~ ., data = train, 
+                    method = "rf",
+                    metric = 'Accuracy',
+                    ntree = 500,
+                   tuneLength  = 15,
+                   trControl = fitControl, 
+                   na.action = na.omit
+                  )
+print(mod_139TS_Anapath)
+
+
+getTrainPerf(mod_139TS_Anapath)
+```
+
+We can see the increase of the accuracy with the number of predictors. We found something very similar to previous result : best mtry around 16. 
+
+```{r}
+plot(mod_139TS_Anapath)
+
+```
+
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+```{r}
+mod_139TS_Anapath
+mod_139TS_Anapath$resample
+```
+
+=> The final model use mtry = 31
+
+We can see in the final model the accuracy of the prediction, and the number of mis-assignated individu par category : 
+```{r}
+print(mod_139TS_Anapath$finalModel)
+
+library(ComplexHeatmap)
+library(circlize)
+
+col_fun = colorRamp2(c( 0, 50, 100), c("black","white", "red"))
+
+nobre_col <- c(ncol(mod_139TS_Anapath$finalModel$confusion)-1)
+
+
+as.matrix(mod_139TS_Anapath$finalModel$confusion[, 1:nobre_col] / rowSums(mod_139TS_Anapath$finalModel$confusion[, 1:nobre_col]) *100) %>%
+  Heatmap(., col = col_fun, 
+          rect_gp = gpar(col = "black", lwd = 0.1),
+          cluster_rows = F, cluster_columns = F,
+          name = "% assignated", column_title = "Confusion Matrix",
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", t(mod_139TS_Anapath$finalModel$confusion[, 1:nobre_col] / rowSums(mod_139TS_Anapath$finalModel$confusion[, 1:nobre_col]) *100)[i, j]), x, y, gp = gpar(fontsize = 10))
+})
+```
+=> The model perform very well to identify Basal and normal tissues.
+The other cancer types are really often caracterize as Luminal A, regardless of their actual subtype. 
+
+
+We verify that the number of trees choosen allow the convergence of the model : with 500 tress, it's more than ok. 
+```{r}
+plot(mod_139TS_Anapath$finalModel$err.rate[, 1], type = "l", xlab = "nombre d'arbres", ylab = "erreur OOB")
+```
+
+
+```{r}
+hist(mod_139TS_Anapath$finalModel$oob.times)
+```
+
+We can test the model on the remaining individus (20% of the initial data set)
+
+```{r}
+test$predicted <- predict(mod_139TS_Anapath, test)
+conf <- confusionMatrix(data = test$predicted, reference = test$output_subtype)
+
+conf$byClass
+
+prediction <- predict(mod_139TS_Anapath, test,type='prob')
+
+```
+=> the model is really sensitytive and specific for basal breast tumor, with high accuracy (respectively 0.94 and 0.89).
+
+For LUminal A, the model is really sensitive but lowly specific : it often misclassify non-luminal A tumor as luminal A. It's coherent with the confusion matrix observed earlier. Total accuracy : 0.80
+
+For the others categories, the model perform poorly, with a really low sensitivity and a bad accuracy (0.5)
+
+```{r}
+library(ComplexHeatmap)
+col_fun = colorRamp2(c( 0, 0.5, 0.75,1), c("grey10","white", "red","firebrick4"))
+
+conf$byClass[,c(1:2,11)] %>% t %>%
+  Heatmap(., col = col_fun, name = "% asignated", column_title = "Confusion Matrix",
+          cluster_rows = F, border = TRUE,  rect_gp = gpar(col = "black", lwd = 0.1),
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", t(conf$byClass[,c(1:2,11)])[i, j]), x, y, gp = gpar(fontsize = 10))
+})
+```
+
+## Variable importance
+
+```{r}
+varImp(mod_139TS_Anapath)
+plot(varImp(mod_139TS_Anapath), top = 15)
+```
+
+# 2. External data
+
+https://www-ncbi-nlm-nih-gov.insb.bib.cnrs.fr/geo/query/acc.cgi?acc=GSE58135
+
+RNA-seq was performed on 28 breast cancer cell lines, 42 Triple Negative Breast Cancer (TNBC) primary tumors, and 42 Estrogen Receptor Positive (ER+) and HER2 Negative Breast Cancer primary tumors, 30 uninovlved breast tissue samples that were adjacent to ER+ primary tumors, 5 breast tissue samples from reduction mammoplasty procedures performed on patients with no known cancer, and 21 uninvolved breast tissue samples that were adjacent to TNBC primary tumors.
+
+=> Summarized experiment download from recount2
+
+```{r}
+load("./data/rse_gene_GSE58135.Rdata")
+```
+
+
+
+## Normalize data
+Summarized experiment give you a count table, we need to normalize them. We will also do some preliminary 
+secondary analyses, to check data distribution etc..
+
+```{r}
+##########################
+# using DESeq2 for the differential analysis of RNA-Seq data
+##########################
+library(DESeq2)
+
+# Transform the design column in factor with relevant informations
+colData(rse_gene)$characteristics <- data.frame(colData(rse_gene)$characteristics)$value
+
+# design : 
+dds <- DESeqDataSet(se = rse_gene,
+                    design = ~characteristics)
+print(dds)
+# Omit lowly expressedgenes
+nrow(dds)
+sum(rowSums(counts(dds)) <= 10)
+
+dds <- dds[ rowSums(counts(dds)) > 10, ]
+nrow(dds)
+
+# extract counts from the dds object used by DESeq2
+counts <- counts(dds)
+
+# number of reads per sample
+barplot(colSums(counts))
+
+# normalization
+dds <- estimateSizeFactors(dds)
+print(sizeFactors(dds))
+
+# effect of the normalization
+normCounts <- counts(dds, normalized=TRUE)
+par(mfrow=c(1,2))
+boxplot(log2(counts+1), main="Raw counts")
+boxplot(log2(normCounts+1), main="Normalized counts")
+
+```
+This part can take  some time. 
+```{r}
+# dispersions estimation
+dds <- estimateDispersions(dds)
+
+# Principal Component Analysis (PCA) plot
+res.vst <- vst(dds)
+plotPCA(res.vst, intgroup="characteristics")
+```
+
+
+=> Ok : First component isolate cell lines from human samples. Second component segregate TNBC, ER+ and non-cancerous samples.
+
+
+## Organize dataset
+
+We will keep only expression data for the 139 selected testis genes. For samples, given the fact that cell lines
+are really divergent from human tissues, we will excluded cell lines and do the prediction only on tumors and 
+normal juxtatumoral samples. 
+
+```{r}
+library(purrr)
+
+# Have a vector of gene sembol corresponding to rows in dds
+rowdata_dt <- data.frame(rowData(dds))
+rowdata_dt$symbol <- map(rowdata_dt$symbol , 1) %>% unlist
+
+
+# Select index corresponding to the 139 selected CT genes
+index_CT <- which(rowdata_dt$symbol %in% list_CT_genes$gene_id)
+length(index_CT)
+```
+
+```{r}
+# Select the outcome variable : Subtype
+output_subtype <- colData(dds)$characteristics %>% as.character
+
+# Symplify the annotations :
+output_subtype[which(output_subtype == "tissue: Breast Cancer Cell Line")] <- "cell_line"
+output_subtype[which(output_subtype == "tissue: ER+ Breast Cancer Primary Tumor")] <- "Tum_ER"
+output_subtype[which(output_subtype == "tissue: Reduction Mammoplasty - No known cancer")] <- "NT_Mammo"
+output_subtype[which(output_subtype == "tissue: Triple Negative Breast Cancer Primary Tumor")] <- "Tum_TNBC"
+output_subtype[which(output_subtype == "tissue: Uninvolved Breast Tissue Adjacent to ER+ Primary Tumor")] <- "NT_ER"
+output_subtype[which(output_subtype == "tissue: Uninvolved Breast Tissue Adjacent to TNBC Primary Tumor")] <- "NT_TNBC"
+
+# remove cell lines & transform output_subtype in factor
+id_rm <- which(output_subtype == "cell_line")
+
+output_subtype <- output_subtype[-id_rm] %>% as.character %>% as.factor
+
+# Check the number of sample, no na values for RF. 
+table(output_subtype) 
+
+is.na(output_subtype) %>% sum
+```
+
+```{r}
+# For the variation B, analyze only tumor samples
+id_tum <- grep("Tum", output_subtype)
+
+# Select subset for gene expression correspondong to cormalize expression value for the 139 selected genes
+data <- data.frame(output_subtype = output_subtype[id_tum])
+data$output_subtype <- data$output_subtype %>% as.character %>% as.factor
+
+data <- cbind(data,
+              t(log2(1+counts(dds, normalized = TRUE)[index_CT,-id_rm ][, id_tum])))
+
+
+
+# Transform duplicated colnames
+colnames(data) <- make.names(c("output_subtype", rowdata_dt$symbol[index_CT]), unique = TRUE)
+
+head(data[, ])
+```
+
+```{r}
+# Check : 
+boxplot(c(2^data[,"HORMAD1"]-1) ~ data[, "output_subtype"])
+```
+
+=> HORMAD1 and CT83 are expressed in TNBC tumor tissues in this dataset too. 
+
+
+## Model
+
+=> Same procedure than with the TCGA. We wondered if : 
+1. The model build here is also able to predict the subtype based on the selected Testis-specific genes expression
+2. The most important variables in the model are also HORMAD1 and CT83. 
+
+```{r}
+set.seed(1)
+x <- data[, -1]
+y <- data$output_subtype
+bestMtry <- tuneRF(x,y, stepFactor = 1.5, improve = 1e-5, ntree = 500)
+
+print(bestMtry)
+
+```
+
+=> Best mtry : 8. We are supposed to have something similar after Caret Optimization. 
+
+```{r}
+# Fractionate data
+train <- data %>% sample_frac(0.75)
+test <- anti_join(data, train)
+
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(42)
+
+# Set up the parameter for learning
+fitControl <- trainControl(verboseIter = T,
+                           method = "repeatedcv", #Manual search by create 10 folds and repeat 3 times
+                           allowParallel = TRUE,
+                           classProbs = TRUE,
+
+                           number=10, 
+                           repeats=3)
+
+
+# Construct the model on the training dataset (80% of the initial individus)
+mod_139TS_GEO <- train(output_subtype ~ ., data = train, 
+                    method = "rf",
+                    metric = 'Accuracy',
+                    ntree = 500,
+                   tuneLength  = 15,
+                   trControl = fitControl, 
+                   na.action = na.omit
+                  )
+print(mod_139TS_GEO)
+
+
+getTrainPerf(mod_139TS_GEO)
+```
+
+=> Final mtry : 10 on this run. Really similar to the previous one.
+
+```{r}
+plot(mod_139TS_GEO)
+
+```
+
+
+We can clearly see that increase the number of predictors in this dataset is not really helpfull for the accuracy. 
+Low number is better. 
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+```{r}
+mod_139TS_GEO
+mod_139TS_GEO$resample
+```
+
+Confusion matrix with the final model, on the training set : 
+
+```{r}
+print(mod_139TS_GEO$finalModel)
+
+library(ComplexHeatmap)
+library(circlize)
+
+col_fun = colorRamp2(c( 0, 50, 100), c("black","white", "red"))
+nobre_col <- c(ncol(mod_139TS_GEO$finalModel$confusion)-1)
+
+
+as.matrix(mod_139TS_GEO$finalModel$confusion[, 1:nobre_col] / rowSums(mod_139TS_GEO$finalModel$confusion[, 1:nobre_col]) *100) %>%
+  Heatmap(., col = col_fun,  rect_gp = gpar(col = "black", lwd = 0.1),
+          cluster_rows = F, cluster_columns = F,
+          name = "% assignated", column_title = "Confusion Matrix",
+          cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", t(mod_139TS_GEO$finalModel$confusion[, 1:nobre_col] / rowSums(mod_139TS_GEO$finalModel$confusion[, 1:nobre_col]) *100)[i, j]), x, y, gp = gpar(fontsize = 10))
+})
+```
+=> The model perform very well to identify Basal and normal tissues.
+The other cancer types are really often caracterize as Luminal A, regardless of their actual subtype. 
+
+
+We verify that the number of trees choosen allow the convergence of the model : with 500 tress, it's more than ok. 
+```{r}
+plot(mod_139TS_GEO$finalModel$err.rate[, 1], type = "l", xlab = "# Trees", ylab = "erreur OOB")
+```
+
+Cross-validation : 
+We can test the model on the remaining individus from the test set (20% of the initial data set)
+
+```{r}
+test$predicted <- predict(mod_139TS_GEO, test)
+conf <- confusionMatrix(data = test$predicted, reference = test$output_subtype)
+
+conf$byClass
+
+prediction <- predict(mod_139TS_GEO, test,type='prob')
+
+```
+```{r}
+library(ComplexHeatmap)
+col_fun = colorRamp2(c( 0, 0.5, 0.75,1), c("grey10","white", "red","firebrick4"))
+
+conf$byClass[c(1:2,11)] %>% 
+  Heatmap(., col = col_fun, name = "% asignated", column_title = "Confusion Matrix",
+          cluster_rows = F, border = TRUE,  rect_gp = gpar(col = "black", lwd = 0.1),
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", conf$byClass[c(1:2,11)][i, j]), x, y, gp = gpar(fontsize = 10))
+})
+```
+
+
+## Variable importance
+In the final model : 
+
+```{r}
+varImp(mod_139TS_GEO)
+plot(varImp(mod_139TS_GEO), top = 15)
+```
+
+
+
+
+
+
+
+

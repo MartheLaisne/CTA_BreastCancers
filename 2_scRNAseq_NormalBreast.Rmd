@@ -1,0 +1,858 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+#Intro
+
+"Breast cancer arises from breast epithelial cells that acquire genetic alterations leading to subsequent loss of tissue homeostasis. Several distinct epithelial subpopulations have been proposed, but complete understanding of the spectrum of heterogeneity and differentiation hierarchy in the human breast remains elusive. 
+
+Here, we use single-cell mRNA sequencing (scRNAseq) to profile the transcriptomes of *25,790 primary human breast epithelial cells* isolated from *reduction mammoplasties of seven individuals*. 
+
+Unbiased clustering analysis reveals the existence of three distinct epithelial cell populations, one basal and two luminal cell types, which we identify as secretory L1- and hormone-responsive L2-type cells. Pseudotemporal reconstruction of differentiation trajectories produces one continuous lineage hierarchy that closely connects the basal lineage to the two differentiated luminal branches. Our comprehensive cell atlas provides insights into the cellular blueprint of the human breast epithelium and will form the foundation to understand how the system goes awry during breast cancer. "
+
+## Libraries
+```{r}
+library(data.table)
+library(tidyverse)
+library(dplyr)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+```
+
+## Data
+Download dataset from GEO
+
+For the first 3 individus (Dataset1):
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/201016_scRNAseq_BreastNormal_PMC5966421_GSE113197")
+
+# get the list of all txt files
+list_of_files <- list.files(path = "./GSE113197_RAW", recursive = TRUE,
+                            pattern = "\\gene_FPKM_withID.txt$", 
+                            full.names = TRUE)
+
+# Read all the files and create a FileName column to store filenames
+df <- list_of_files %>%
+  set_names(.) %>%
+  map_df(read_table2, .id = "FileName")
+
+head(df)
+```
+
+```{r}
+df$FileName %>% table %>% head
+```
+
+
+For the second set of individus (Dataset 2-5)
+```{r}
+GSM3099846 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/201016_scRNAseq_BreastNormal_PMC5966421_GSE113197/GSM3099846_Ind4_Expression_Matrix.txt")
+
+GSM3099847 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/201016_scRNAseq_BreastNormal_PMC5966421_GSE113197/GSM3099847_Ind5_Expression_Matrix.txt")
+
+GSM3099848 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/201016_scRNAseq_BreastNormal_PMC5966421_GSE113197/GSM3099848_Ind6_Expression_Matrix.txt")
+
+GSM3099849 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/201016_scRNAseq_BreastNormal_PMC5966421_GSE113197/GSM3099849_Ind7_Expression_Matrix.txt")
+
+head(GSM3099849)
+```
+
+
+
+## Assemble
+
+```{r}
+# Spread samples into columns (variables)
+dt_spread <- tidyr::spread(data = df,key = FileName, value = FPKM) 
+
+#Rename colums
+# --------------
+name_col_sub <- colnames(dt_spread)[2:ncol(dt_spread)]
+# omit the path at the beginning of the string
+name_col_sub <- gsub(pattern = "./GSE113197_RAW/", replacement = "", x = name_col_sub)
+#. : Any character, except \n or line terminator & + : multiple times
+name_col_sub <- gsub(pattern = "_.+", replacement = "", x = name_col_sub)
+
+colnames(dt_spread) <- c("gene_id", name_col_sub)
+
+head(dt_spread)
+```
+
+
+## Annotation
+```{r}
+library(org.Hs.eg.db)
+
+keytypes(org.Hs.eg.db)
+```
+
+
+```{r}
+anno <- AnnotationDbi::select(org.Hs.eg.db,
+                              keys=dt_spread$gene_id,
+              columns=c("ENTREZID","SYMBOL","GENENAME"),
+              keytype="ENSEMBL")
+# Have a look at the annotation
+head(anno)
+```
+
+Add annotation
+
+```{r}
+dt_spread_anno <- merge.data.frame(x= anno, y = dt_spread,
+                              by.x = "ENSEMBL", by.y = "gene_id", all = TRUE)
+
+write.table(dt_spread_anno, "Ind1_3_FPKM.txt", sep= "\t", col.names = TRUE, quote=F)
+
+dt_spread_anno %>% head
+```
+
+```{r}
+dt_ind4_7 <- merge.data.frame(x= GSM3099846, y = GSM3099849,
+                              by.x = "X", by.y = "X", all = TRUE)
+dt_ind4_7 <- merge.data.frame(x= dt_ind4_7, y = GSM3099848,
+                              by.x = "X", by.y = "X", all = TRUE)
+dt_ind4_7 <- merge.data.frame(x= dt_ind4_7, y = GSM3099847,
+                              by.x = "X", by.y = "X", all = TRUE)
+
+write.table(dt_ind4_7, "Ind4_7_Counts.txt", sep= "\t", col.names = TRUE, quote=F)
+
+dt_ind4_7 %>% head
+```
+
+
+# Analyze
+
+```{r}
+dt_spread_anno[which(dt_spread_anno$SYMBOL=="HORMAD1"),5:ncol(dt_spread_anno)] %>% t %>% boxplot
+
+dt_ind4_7[which(dt_ind4_7$X=="HORMAD1"),2:ncol(dt_ind4_7)] %>% t %>% boxplot
+
+boxplot(t(dt_ind4_7[which(dt_ind4_7$X=="HORMAD1"),2:ncol(dt_ind4_7)] ) ~ gsub("_.+", "", colnames(dt_ind4_7)[2:ncol(dt_ind4_7)]))
+```
+```{r}
+names <- gsub("_.+", "", colnames(dt_ind4_7)[2:ncol(dt_ind4_7)])
+value <- t(dt_ind4_7[which(dt_ind4_7$X=="HORMAD1"),2:ncol(dt_ind4_7)] )
+data <- data.frame(names,value)
+colnames(data) <- c("names", "value")
+
+# Basic boxplot
+boxplot(data$value ~ data$names , col=terrain.colors(4) )
+ 
+# Add data points
+mylevels <- levels(data$names)
+levelProportions <- summary(data$names)/nrow(data)
+for(i in 1:length(mylevels)){
+ 
+  thislevel <- mylevels[i]
+  thisvalues <- data[data$names==thislevel, "value"]
+   
+  # take the x-axis indices and add a jitter, proportional to the N in each level
+  myjitter <- jitter(rep(i, length(thisvalues)), amount=levelProportions[i]/2)
+  points(myjitter, thisvalues, pch=20, col=rgb(0,0,0,.9)) 
+   
+}
+```
+
+
+```{r}
+dt_spread_anno[which(dt_spread_anno$SYMBOL=="CT83"),5:ncol(dt_spread_anno)] %>% t %>% boxplot
+dt_ind4_7[which(dt_ind4_7$X=="CT83"),5:ncol(dt_ind4_7)] %>% t %>% boxplot
+
+
+boxplot(t(dt_ind4_7[which(dt_ind4_7$X=="CT83"),2:ncol(dt_ind4_7)] ) ~ gsub("_.+", "", colnames(dt_ind4_7)[2:ncol(dt_ind4_7)]))
+```
+```{r}
+names <- gsub("_.+", "", colnames(dt_ind4_7)[2:ncol(dt_ind4_7)])
+value <- t(dt_ind4_7[which(dt_ind4_7$X=="CT83"),2:ncol(dt_ind4_7)] )
+data <- data.frame(names,value)
+colnames(data) <- c("names", "value")
+
+# Basic boxplot
+boxplot(data$value ~ data$names , col=terrain.colors(4) )
+ 
+# Add data points
+mylevels <- levels(data$names)
+levelProportions <- summary(data$names)/nrow(data)
+for(i in 1:length(mylevels)){
+ 
+  thislevel <- mylevels[i]
+  thisvalues <- data[data$names==thislevel, "value"]
+   
+  # take the x-axis indices and add a jitter, proportional to the N in each level
+  myjitter <- jitter(rep(i, length(thisvalues)), amount=levelProportions[i]/2)
+  points(myjitter, thisvalues, pch=20, col=rgb(0,0,0,.9)) 
+   
+}
+```
+
+
+
+
+
+
+
+```{r}
+dt_spread_anno[,c(1:3, which(dt_spread_anno[which(dt_spread_anno$SYMBOL=="CT83"),5:ncol(dt_spread_anno)]  > 0))][
+  order(dt_spread_anno[,c(1:3, which(dt_spread_anno[which(dt_spread_anno$SYMBOL=="CT83"),5:ncol(dt_spread_anno)]  > 0))][, 4], decreasing = T),
+] %>% head(.,25)
+```
+
+```{r}
+dt_spread_anno[,c(1:3, which(dt_spread_anno[which(dt_spread_anno$SYMBOL=="HORMAD1"),5:ncol(dt_spread_anno)]  > 0))] %>% head
+```
+
+
+```{r}
+KEEP=c('dt_spread_anno', 'dt_ind4_7')
+
+rm(list= ls()[!(ls() %in% KEEP )])
+```
+
+
+
+
+## Seurat
+
+For cluster identification in both microfluidics- and droplet-enabled scRNAseq datasets, we utilized the Seurat pipeline17. The data matrices were imported into R and were processed with the Seurat R package version 1.2.1, where the FPKM values were transformed into log-space after the aforementioned trimming steps (each gene was expressed in at least three cells, each cell has at least 900 genes). 
+PCA was performed using highly variable genes in the trimmed dataset. Using the first two PC's as input, we then performed density clustering to identify groupings in the data and t-distributed statistical neighbor embedding (tSNE) to visualize. Using further Seurat functionality, marker genes for each respective cluster were identified and used for subsequent analysis.
+
+For droplet-enabled scRNAseq data, we used the Seurat R package version 2.0.0. Data was read into R as a counts matrix and transformed into log-space. Due to the difference in gene detection across the two platforms, differences in chemistry for the library prep, as well as sequencing depth per cell, a minimum cutoff of 500 and a maximum cut-off of 6000 genes per cell for this dataset was used. In addition, cells with a percentage of total reads that aligned to the mitochondrial genome (referred to as percent mito) greater than 10% were removed, since increased detection of mitochondrial genes can be associated with cells undergoing stress and cell death43.
+
+To account for the possibility of individual cell complexity driving cluster separation, we employed Seurat's "RegressOut" function to reduce the contribution of both the number of UMI's and the percent mito. Variable genes were then determined for subsequent PCA for each separate individual. For tSNE projection and clustering analysis, we used the first ten principal components. We used the feature plot function to highlight expression of known marker genes for basal (e.g., KRT5, KRT14) and luminal cells (e.g., KRT8, KRT18) to identify which clusters belonged to which epithelial cell type. The specific markers for each cluster identified by Seurat were determined using the "FindAllMarkers" function.
+```{r}
+rownames(dt_spread_anno) <- make.names(dt_spread_anno$SYMBOL, unique = T)
+rownames(dt_ind4_7) <- make.names(dt_ind4_7$X, unique = T)
+
+```
+
+
+
+```{r}
+# Initialize the Seurat object with the raw (non-normalized data).
+
+# We keep unexpressed genes because we are interested in C/T genes, which are expected to not be expressed in healthy breast cells 
+dt_seurat <- CreateSeuratObject(counts = dt_ind4_7[,  2:ncol(dt_ind4_7)],
+                                project = "dt_seurat3k",
+                                min.cells = 0, min.features = 900)
+dt_seurat
+```
+
+```{r}
+dt_seurat[["percent.mt"]] <- PercentageFeatureSet(dt_seurat, pattern = "^MT\\.")
+# Visualize QC metrics as a violin plot
+VlnPlot(dt_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(dt_seurat, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(dt_seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+```{r}
+dt_seurat <- subset(dt_seurat, subset = nFeature_RNA > 500 & nFeature_RNA < 6000 & percent.mt < 10)
+```
+
+
+
+```{r}
+# LogNormalize
+dt_seurat <- NormalizeData(dt_seurat)
+```
+
+
+Identification of highly variable features (feature selection)
+
+```{r}
+dt_seurat <- FindVariableFeatures(dt_seurat, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(dt_seurat), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(dt_seurat)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+Scaling the data
+
+```{r}
+all.genes <- rownames(dt_seurat)
+dt_seurat <- ScaleData(dt_seurat, features = all.genes)
+```
+Perform linear dimensional reduction
+```{r}
+dt_seurat <- RunPCA(dt_seurat, features = VariableFeatures(object = dt_seurat))
+
+VizDimLoadings(dt_seurat, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+DimPlot(dt_seurat, reduction = "pca")
+```
+
+Cluster the cells
+
+```{r}
+dt_seurat <- FindNeighbors(dt_seurat, dims = 1:10)
+dt_seurat <- FindClusters(dt_seurat, resolution = 0.5)
+```
+
+UMAP
+```{r}
+dt_seurat <- RunUMAP(dt_seurat, dims = 1:10)
+```
+```{r}
+DimPlot(dt_seurat, reduction = "umap")
+```
+
+##Homemade umap 
+```{r}
+
+library(factoextra)
+library(ggplot2)
+
+
+umap <-  Embeddings(dt_seurat[["umap"]]) %>% as.data.frame()
+
+#Coordonates for UMAP1 and UMAP2
+dataGG <- data.frame(UMAP_1 = umap$UMAP_1, UMAP_2 = umap$UMAP_2)
+
+#Add sample names
+dataGG$names <- rownames(umap)
+
+
+#Add expression levels for selected markers
+dataGG$hormad <- dt_normdat[which(rownames(dt_normdat) == "HORMAD1"), colnames(dt_normdat) %in% dataGG$names ] %>% t
+dataGG$dmrtc2 <- rep(0, nrow(dataGG))
+dataGG$TEX14 <- dt_normdat[which(rownames(dt_normdat) == "TEX14"), colnames(dt_normdat) %in% dataGG$names ] %>% t
+dataGG$TDRD1 <- dt_normdat[which(rownames(dt_normdat) == "TDRD1"), colnames(dt_normdat) %in% dataGG$names ] %>% t
+dataGG$LRGUK <- dt_normdat[which(rownames(dt_normdat) == "LRGUK"), colnames(dt_normdat) %in% dataGG$names ] %>% t
+
+dataGG$CT83 <-  dt_normdat[which(rownames(dt_normdat) == "CT83"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+
+# No reads for DMRTC2
+dataGG$dmrtc2 <-  rep(0, nrow(dataGG))
+
+
+# Other markers
+dataGG$msrb3 <-  dt_normdat[which(rownames(dt_normdat) == "MSRB3"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$esr1 <-  dt_normdat[which(rownames(dt_normdat) == "ESR1"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+
+
+## Clusters info
+
+dataGG$cluster <- Idents(dt_seurat)
+
+```
+
+## Figure 1F: Expression HORMAD1 CT83 
+```{r}
+
+
+gCT83 = ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = CT83 ))+
+  geom_point(size = 4, shape = 1)+
+  scale_color_gradient(low="grey80", high="red")+ 
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("CT83") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+gHORMAD = ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = hormad ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Hormad1 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+
+  
+library(gridExtra)
+grid.arrange(gCT83, gHORMAD)
+```
+
+## Figure S1F
+```{r}
+ga <- ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = dmrtc2 ))+
+  geom_point(size = 2, shape = 1) +
+  scale_color_gradient(low="grey90", high="grey90")+ 
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("dmrtc2") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+gb <- ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = TDRD1 ))+
+  geom_point(size = 2, shape = 1) +
+  scale_color_gradient(low="grey90", high="red")+ 
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("TDRD1") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+gc <- ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = TEX14 ))+
+  geom_point(size = 2, shape = 1) +
+  scale_color_gradient(low="grey90", high="red")+ 
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("TEX14") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+gd <- ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = LRGUK ))+
+  geom_point(size = 2, shape = 1) +
+  scale_color_gradient(low="grey90", high="red")+ 
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("LRGUK") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+  
+library(gridExtra)
+grid.arrange(ga, gb, gc, gd)
+```
+
+
+
+```{r}
+ge <- ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = msrb3 ))+
+  geom_point(size = 2, shape = 1) +
+  scale_color_gradient(low="grey90", high="red")+ 
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("MSRB3") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+gf <- ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = esr1 ))+
+  geom_point(size = 2, shape = 1) +
+  scale_color_gradient(low="grey90", high="red")+ 
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("ESR1") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+grid.arrange(ge, gf)
+```
+
+# Cell types
+The analyze was performed following the recommandation of the original paper. Source code is available here : 
+https://github.com/Michorlab/tnbc_scrnaseq/blob/master/code/funcs_markers.R
+
+## Functions:
+
+```{r}
+## functions to identify cell types based on markers
+
+# function to find which markers are expressed by cells in an expression matrix
+# returns list of lists, length of each list = the number of cells in the matrix
+lists_markers <- function(mat_here, thresh, markers){
+  
+  epithelial_cells <- list()
+  immune_cells <- list()
+  other_cells <- list()
+  
+  for (j in 1:ncol(mat_here)) {
+    
+    x <- mat_here[, j]
+    
+    vec_epithelial <- c()
+    vec_immune <- c()
+    vec_other  <- c()
+    
+    for (i in 1:nrow(markers)) {
+      
+      name_marker <- markers[i, "gene"]
+      eval(parse(text = paste(name_marker, "_in <- which(rownames(mat_here) == ", 'as.character(name_marker)', ")", sep = "")))
+      
+      eval(parse(text = paste("if (x[", name_marker,"_in] > thresh) {vec_", markers[i, "type_long"], " <- c(vec_", markers[i, "type_long"], ", ", 'as.character(name_marker)', 
+                              "); names(vec_", markers[i, "type_long"], ")[length(vec_", markers[i, "type_long"], ")] <- ", 
+                             'as.character(markers[i, "type"])', "}", sep = "")))
+    }
+    
+    epithelial_cells[[length(epithelial_cells) + 1]] <- if (length(vec_epithelial)) vec_epithelial else list(NULL)
+    immune_cells[[length(immune_cells) + 1]] <- if (length(vec_immune)) vec_immune else list(NULL)
+    other_cells[[length(other_cells) + 1]] <- if (length(vec_other)) vec_other else list(NULL)
+    
+  }
+  
+  names(epithelial_cells) <- colnames(mat_here)
+  epithelial_cells <- lapply(epithelial_cells, function(x){unlist(x)})
+  
+  names(immune_cells) <- colnames(mat_here)
+  immune_cells <- lapply(immune_cells, function(x){unlist(x)})
+  
+  names(other_cells) <- colnames(mat_here)
+  other_cells <- lapply(other_cells, function(x){unlist(x)})
+  
+  return(lists_cells = list("epithelial_cells" = epithelial_cells, "immune_cells" = immune_cells, "other_cells" = other_cells))
+}
+
+
+```
+
+
+```{r}
+# decide whether the cells with markers are epithelial by the rules
+# returns vector binary, length number of cells in the list
+decide_is_epithelial <- function(list_epithelial_markers){
+  
+  mat_is_epithelial <- sapply(list_epithelial_markers, function(x){
+    if (length(x) >= 2)
+      return(1)
+    return(0)
+  })
+  
+  return(mat_is_epithelial)
+}
+
+
+```
+
+```{r}
+decide_is_epithelial <- function(list_epithelial_markers){
+  
+  mat_is_epithelial <- sapply(list_epithelial_markers, function(x){
+    # no marker was found
+    if (length(x) == 0)
+      return(0)
+    # only one single marker (either specific or unspecific) --> not enough evidence
+    if (length(unique(x)) == 1)
+      return(0)
+    # only one type with at least 2 markers (without PTPRC) --> that type
+    if (length(x) > 1 & length(unique(names(x))) == 1)
+      return(unique(names(x)))
+    # more markers of different types
+    if (length(unique(names(x))) > 1) {
+      names_cells <- sort(table(names(x)), decreasing = TRUE)
+      # one marker is prevalent
+      if (names_cells[1] >= 3 && names_cells[2] < 2)
+        return(names(names_cells)[1])
+      else
+        return("epithelial_mix")
+    }  })
+  
+  return(mat_is_epithelial)
+}
+```
+
+
+
+```{r}
+# decide whether the cells with markers are immune by the rules
+# returns vector binary, length number of cells in the list
+decide_is_immune <- function(list_immune_markers){
+  
+  mat_is_immune <- sapply(list_immune_markers, function(x){
+    
+    # no marker was found
+    if (length(x) == 0)
+      return(0)
+    # only one single marker (either specific or unspecific) --> not enough evidence
+    if (length(unique(x)) == 1)
+      return(0)
+    # only one type with at least 2 markers (without PTPRC) --> that type
+    if (length(x) > 1 & length(unique(names(x))) == 1)
+      return(unique(names(x)))
+    # only one type with at least 1 marker, and PTPRC --> that type
+    if (length(unique(names(x))) == 2 && "PTPRC" %in% unique(names(x)))
+      return(setdiff(unique(names(x)), "PTPRC"))
+    # more markers of different types
+    if (length(unique(names(x))) > 1) {
+      names_cells <- sort(table(names(x)), decreasing = TRUE)
+      # one marker is prevalent
+      if (names_cells[1] >= 3 && names_cells[2] < 2)
+        return(names(names_cells)[1])
+      else
+        return("immune_mix")
+    }
+  })
+  
+  return(mat_is_immune)
+}
+
+```
+
+
+
+```{r}
+
+
+# decide whether the cells with markers are stroma, endothelial or adipocytes by the rules
+# returns vector binary, length number of cells in the list
+decide_is_other <- function(list_other_markers){
+  
+  mat_is_other <- sapply(list_other_markers, function(x){
+    # no marker was found
+    if (length(x) == 0)
+      return(0)
+    # only one marker was found --> not enough evidence
+    if (length(x) == 1)
+      return(0)
+    # more than one marker of the same type --> that type
+    if (length(x) > 1 & length(unique(names(x))) == 1)
+      return(unique(names(x)))
+    # both types
+    if (length(unique(names(x))) > 1) {
+      names_cells <- sort(table(names(x)), decreasing = TRUE)
+      # one marker is prevalent
+      if (names_cells[1] >= 3 && names_cells[2] < 2)
+        return(names(names_cells)[1])
+      else
+        return("other_mix")
+    }
+  })
+  return(mat_is_other)
+}
+
+```
+
+
+
+
+```{r}
+
+# function to evaluate the distribution of expression for the cases in which cells only have one epithelial marker expressed
+# type_test indicates whether we should look at the distribution of that markers in the cells from only one patient or from all patients
+# thrsh_percent is the how high the expression should be, as a fraction
+expression_one_epithelial_marker <- function(mat_here, pd_here, is_epithelial, epithelial_markers, type_test, thresh_percent){
+  
+  cdfspats_is_epithelial <- list()
+  cdfsall_is_epithelial <- list()
+  exprs_is_epithelial <- list()
+  for (i in 1:length(is_epithelial)) {
+    # if the cell is not already epithelial
+    if (is_epithelial[i] == 0) {
+      # but has some epithelial markers
+      if (!is.null(epithelial_markers[[i]])) {
+        name_cell <- names(epithelial_markers)[i]
+        patient <- pd_here$patient[grep(name_cell, colnames(mat_here))]
+        all_cells_pat <- colnames(mat_here)[which(pd_here$patient == patient)]
+        # indices of the current patient among the cells that are epithelial by markers
+        idx_cells_pat_here <- na.omit(match(all_cells_pat, colnames(mat_here)[which(is_epithelial == 1)]))
+        
+        cdfs_pats <- rep(NA, length(epithelial_markers[[i]]))
+        names(cdfs_pats) <- epithelial_markers[[i]]
+        cdfs_all <- rep(NA, length(epithelial_markers[[i]]))
+        names(cdfs_all) <- epithelial_markers[[i]]
+        exprs_j_cell <- rep(NA, length(epithelial_markers[[i]]))
+        names(exprs_j_cell) <- epithelial_markers[[i]]
+        
+        for (j in 1:length(epithelial_markers[[i]])) {
+          # expression of the current cell for the current epithelial marker
+          exprs_j_cell[j] <- mat_here[which(rownames(mat_here) == epithelial_markers[[i]][j]), i]
+          exprs_j_pats <- mat_here[,which(is_epithelial == 1)][which(rownames(mat_here) == epithelial_markers[[i]][j]), idx_cells_pat_here]
+          w_pats <- ecdf(exprs_j_pats)
+          cdfs_pats[j] <- w_pats(exprs_j_pats[j])
+          
+          exprs_j_all <- mat_here[,which(is_epithelial == 1)][which(rownames(mat_here) == epithelial_markers[[i]][j]), ]
+          w_all <- ecdf(exprs_j_all)
+          cdfs_all[j] <- w_all(exprs_j_all[j])
+        }
+        
+        exprs_is_epithelial[[i]] <- exprs_j_cell
+        cdfspats_is_epithelial[[i]] <- cdfs_pats
+        cdfsall_is_epithelial[[i]] <- cdfs_all
+      }
+    }
+  }
+  
+  for (i in 1:length(cdfsall_is_epithelial)) {
+    if (type_test == "all") {
+      is_epithelial_extra <- sapply(cdfsall_is_epithelial, function(x){if (!is.null(x) && names(x) %in% c("EPCAM", markers$gene[grep("KRT", markers$gene)]) && x > thresh_percent) return(1) else return(0)})
+    }
+    
+    if (type_test == "pats") {
+      is_epithelial_extra <- sapply(cdfspats_is_epithelial, function(x){if (!is.null(x) && names(x) %in% c("EPCAM", markers$gene[grep("KRT", markers$gene)]) && x > thresh_percent) return(1) else return(0)})
+    }
+  }
+  
+  return(list("exprs_is_epithelial" = exprs_is_epithelial, "cdfspats_is_epithelial" = cdfspats_is_epithelial, 
+              "cdfsall_is_epithelial" = cdfsall_is_epithelial, "is_epithelial_extra" = is_epithelial_extra, "type_test" = type_test, "thresh_percent" = thresh_percent))
+}
+```
+
+
+## Data on markers
+
+```{r}
+
+markers_clean <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/190801_scRNAseq_PMC6123496/markers_clean.txt")
+Lehmann_signature <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_scRNAseq/190801_scRNAseq_PMC6123496/Lehmann_signature.txt")
+
+
+boxplot(dt_normdat[which(rownames(dt_normdat) %in% subset(markers_clean, type_long == "epithelial")$gene),][3,])
+```
+
+
+```{r}
+pd_info <- data.frame(name_sample = colnames(dt_normdat))
+
+pd_info$Ind <- gsub("_.+", "", pd_info$name_sample)
+
+head(pd_info)
+```
+
+## Identification of cell types
+
+```{r}
+# marker names
+markers_clean$type_heatmap <- markers_clean$type
+markers_clean$type_heatmap[which(markers_clean$type_heatmap == "luminalprogenitor")] <- "luminal progenitor"
+markers_clean$type_heatmap[which(markers_clean$type_heatmap == "luminalepithelial")] <- "luminal epithelial"
+markers_clean$type_heatmap[which(markers_clean$type_heatmap == "basalepithelial")] <- "basal epithelial"
+markers_clean$type_heatmap[which(markers_clean$type_heatmap %in% c("EPCAM", "EGFR", "CDH1"))] <- "epithelial"
+markers_clean$type_heatmap[which(markers_clean$type_heatmap == "Bcell")] <- "B cell"
+markers_clean$type_heatmap[which(markers_clean$type_heatmap == "Tcell")] <- "T cell"
+
+markers_clean$type_long_heatmap <- markers_clean$type_long
+markers_clean$type_long_heatmap[which(markers_clean$type == "stroma")] <- "stroma"
+markers_clean$type_long_heatmap[which(markers_clean$type == "endothelial")] <- "endothelial"
+
+
+```
+
+
+```{r}
+## cell types by markers (done as described in SI of paper)
+thresh <- 1
+cells_markers <- lists_markers(mat_here = dt_normdat, 
+                               thresh = thresh , 
+                               markers = markers_clean[-which(markers_clean$gene %in% c("KRT6",# ñot in dt_normdat
+                                                                                        "CD3E",
+                                                                                        "CD2","SERPINB3")),])
+epithelial_markers <- cells_markers$epithelial_cells
+is_epithelial <- decide_is_epithelial(epithelial_markers)
+immune_markers <- cells_markers$immune_cells
+is_immune <- decide_is_immune(immune_markers)
+other_markers <- cells_markers$other_cells
+is_other <- decide_is_other(other_markers)
+
+#
+is_epithelial_simple <- is_epithelial
+is_epithelial_simple[which(is_epithelial == "epithelial_mix")] <- 0
+is_immune_simple <- is_immune
+is_immune_simple[which(is_immune == "immune_mix")] <- 0
+is_other_simple <- is_other
+is_other_simple[which(is_other == "other_mix")] <- 0
+
+cells_types <- paste(is_epithelial_simple, is_immune_simple, is_other_simple, sep = "_")
+names(cells_types) <- names(is_epithelial)
+cell_types <- sapply(strsplit(cells_types, "_"), function(x){
+  # none of the cell types (epithelial, immune, other)
+  if (sum(x == 0) == 3) return("unknown") else 
+    if (sum(x == 0) == 2) return(setdiff(x, "0")) else
+      if (sum(c("epithelial", "stroma", "0") %in% x) == 3 | sum(c("basalepithelial", "stroma", "0") %in% x) == 3 | sum(c("luminalepithelial", "stroma", "0") %in% x) == 3) return("epithelial") else
+        return(paste(setdiff(x, "0"),collapse = "_"))})
+cell_types_simple <- cell_types
+cell_types_simple[which(sapply(strsplit(cell_types, "_"), length) > 1)] <- "undecided"
+table(cell_types_simple)
+
+```
+
+
+
+## Summary
+
+
+```{r}
+# update colData and pd_norm
+pd_info$cell_types_markers <- cell_types_simple
+
+pd_info$cluster = dataGG$cluster
+
+```
+
+
+
+
+## Figure 1F: patients
+```{r}
+ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, 
+                               color = as.factor(pd_info$Ind) ))+
+  geom_point(size = 4, shape = 21) +
+  scale_color_manual(values = c("steelblue3", "darkgreen", "black", "cyan", "chartreuse3", "skyblue2", "grey40", "grey40"), na.translate = FALSE) +
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Ind cl all") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+## Figure 1F: Normal cell types
+
+```{r}
+g1 = ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, 
+                               color = as.factor(pd_info$cell_types_markers) ))+
+  geom_point(size = 4, shape = 21) +
+  scale_color_manual(values = c("red","steelblue3", "darkgreen", "chartreuse3", "cyan", "grey70", "skyblue2", "grey40", "grey40"), na.translate = FALSE) +
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Cell Types cl all") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+g1
+```
+
+Nb : it will be possible with more work to re-assign the unknown cells based on clustering 
+https://github.com/Michorlab/tnbc_scrnaseq/blob/master/code/analysis1.R
+
+## Statistics
+```{r}
+id_tum <- which(pd_info$Ind == "Ind5")
+
+id_count <- which(pd_info$cell_types_markers[id_tum] %in% 
+                    c("epithelial", "basalepithelial", "luminalepithelial", "unknown"))
+
+length(id_count)/length(id_tum)*100
+
+# How many cells are CT83 positive, HORMAD1 positive or both in a positive patient (Ind5?)
+
+length(which(dataGG[id_tum[id_count],]$CT83>0))/length(dataGG[id_tum[id_count],]$CT83)*100
+length(which(dataGG[id_tum[id_count],]$hormad>0))/length(dataGG[id_tum[id_count],]$CT83)*100
+length(which(dataGG[id_tum[id_count],]$hormad>0 & dataGG[id_tum[id_count],]$CT83>0))/length(dataGG[id_tum[id_count],]$CT83)*100
+```
+
+
+
+

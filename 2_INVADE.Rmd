@@ -1,0 +1,386 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Intro
+
+## Libraries
+```{r message=FALSE, warning=FALSE}
+library(readxl)
+
+library(ggplot2)
+library(ggsci)
+library(gridExtra)
+library(ComplexHeatmap)
+library(circlize)
+
+library(dplyr)
+
+library(DESeq2)
+```
+
+## Datas
+Define the output directory
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres")
+
+pathRes="./res"
+```
+
+Load the data :
+```{r}
+RNAseq_INVADE_raw_data <- read_excel("data/RNAseq INVADE - raw data.xlsx")
+
+AnnotationINVADE <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/200623_ASalomon/AnnotationINVADE.txt")
+
+rownames(AnnotationINVADE) <- make.names(AnnotationINVADE$Num)
+
+rownames(RNAseq_INVADE_raw_data) <- make.names(RNAseq_INVADE_raw_data$Id, unique = TRUE)
+
+Data_row <- data.frame(Symbol = RNAseq_INVADE_raw_data$Id)
+rownames(Data_row) <- rownames(RNAseq_INVADE_raw_data)
+```
+
+
+
+
+# Normalize data
+Summarized experiment give you a count table, we need to normalize them. We will also do some preliminary analyses, to check data distribution etc..
+
+```{r}
+#Encoding consistent variables
+
+AnnotationINVADE2 <- AnnotationINVADE
+
+AnnotationINVADE2$IHC_Classe_histomoleculaire <- AnnotationINVADE2$IHC_Classe_histomoleculaire %>% as.character
+
+AnnotationINVADE2$IHC_Classe_histomoleculaire[AnnotationINVADE2$IHC_Classe_histomoleculaire == "HER2+"] <- "HER2"
+AnnotationINVADE2$IHC_Classe_histomoleculaire[ AnnotationINVADE2$IHC_Classe_histomoleculaire == "lum B / HER2+"] <- "HER2"
+AnnotationINVADE2$IHC_Classe_histomoleculaire[ AnnotationINVADE2$IHC_Classe_histomoleculaire == "lumB / HER2+"] <- "HER2"
+
+AnnotationINVADE2$IHC_Classe_histomoleculaire <- AnnotationINVADE2$IHC_Classe_histomoleculaire %>% as.factor
+
+
+AnnotationINVADE2$Type <- AnnotationINVADE2$Type %>% as.character
+
+AnnotationINVADE2$Type[AnnotationINVADE2$Type == "PIK_ microinf"] <- "microinf"
+
+AnnotationINVADE2$Type <- AnnotationINVADE2$Type %>% as.factor
+
+```
+
+
+
+```{r}
+##########################
+# using DESeq2 for the differential analysis of RNA-Seq data
+##########################
+rse_gene <-  DESeqDataSetFromMatrix(countData = RNAseq_INVADE_raw_data[, -1],
+                              colData = AnnotationINVADE,
+                              rowData = Data_row,
+                              design= ~ Type + IHC_Classe_histomoleculaire )
+
+# design : 
+dds <- DESeqDataSet(se = rse_gene,
+                    design = ~ Type + IHC_Classe_histomoleculaire)
+print(dds)
+
+# extract counts from the dds object used by DESeq2
+counts <- counts(dds)
+
+# number of reads per sample
+barplot(colSums(counts))
+
+# normalization
+dds <- estimateSizeFactors(dds)
+print(sizeFactors(dds))
+
+# effect of the normalization
+normCounts <- counts(dds, normalized=TRUE)
+par(mfrow=c(1,2))
+boxplot(log2(counts+1), main="Raw counts")
+boxplot(log2(normCounts+1), main="Normalized counts")
+
+```
+This part can take  some time. 
+```{r}
+# dispersions estimation
+dds <- estimateDispersions(dds)
+
+# Principal Component Analysis (PCA) plot
+res.vst <- vst(dds)
+plotPCA(res.vst, intgroup="IHC_Classe_histomoleculaire")
+```
+
+=> Ok : First component isolate Luminal vs. Her2 / TN
+
+```{r}
+plotPCA(res.vst, intgroup="Type")
+
+```
+
+=> Ok : PC2 isolate in situ/microI from infil
+```{r}
+dds <- DESeq(dds)
+res <- results(dds)
+res[c(grep("HORMAD1", rownames(res)),
+      grep("CT83", rownames(res)),
+      grep("DMRTC2", rownames(res)),
+      grep("TDRD1", rownames(res)),
+      grep("LRGUK", rownames(res)),
+      grep("TEX14", rownames(res)),
+      grep("ACTL8", rownames(res))), ]
+```
+
+
+
+
+
+# Threshold definitions for the 139 CT
+
+
+```{r}
+# 139 selected CT
+Selected_CT_MeanInf1 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190403_Breast_SelectedCT_withDerive/Selected_CT_MeanInf1.txt")
+head(Selected_CT_MeanInf1)
+
+```
+```{r}
+data_norm <- counts(dds, normalized = T)
+
+head(data_norm[, 1:5])
+```
+
+```{r}
+# Index for the 139 CT
+id_gene_list <- which(rownames(data_norm) %in% Selected_CT_MeanInf1$gene_id ==TRUE)
+
+# Subset of gene expression for 139 CT genes only
+CT_exp_norm <- data_norm[id_gene_list, ]
+
+```
+
+
+
+> Density
+We don't have normal samples to set up a threshold for significant expression of CT genes.
+Strategy: we assumed that most of the genes are not or lowly expressed in tumor samples, and considered these expression values as background.
+
+The distribution of expression values for all genes follow a bimodal distribution, which is consistent to our preliminary assumption. 
+```{r}
+plot(density(log2(data_norm+1), bw = 0.7))
+
+```
+
+Caculate the derivative function of the Kernel's density estimation : 
+```{r}
+d_all <- density(log2(data_norm+1), bw = 0.7)
+deriv_all <-diff(d_all$y)/diff(d_all$x)
+
+variations_all <-c()
+
+for(k in 2:length(deriv_all)){
+    if(sign(deriv_all[k]) != sign(deriv_all[k-1])){
+         variations_all <- c(variations_all,k)
+    }
+}
+(2^d_all$x[variations_all])-1
+
+
+plot(d_all)
+abline(v = d_all$x[variations_all])
+abline(v = d_all$x[variations_all])
+
+```
+
+Same calculation, for CT genes only
+```{r}
+d_ct <- density(log2(CT_exp_norm+1), bw = 0.7)
+deriv_ct <-diff(d_ct$y)/diff(d_ct$x)
+
+variations_ct <-c()
+
+for(k in 2:length(deriv_ct)){
+    if(sign(deriv_ct[k]) != sign(deriv_ct[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+(2^d_ct$x[variations_ct])-1
+
+
+plot(d_ct)
+abline(v = d_ct$x[variations_ct])
+```
+
+Compute threshold:
+
+```{r}
+mini_dat <- log2(data_norm+1)
+
+thr <- c(d_all$x[variations_all])[2]
+
+mini_dat <- apply(mini_dat, 1, function(X){
+  id_inf <- which(X > thr)
+  X[id_inf] <- rep(NA, length(id_inf))
+  return(X)
+})
+
+mini_dat <- apply(mini_dat, 2, function(X){
+  id_inf <- which(X > thr)
+  X[id_inf] <- rep(NA, length(id_inf))
+  return(X)
+})
+
+mini_dat <- t(mini_dat)
+
+sd(mini_dat, na.rm = T)
+
+thr_deriv <- thr + 3*sd(mini_dat, na.rm = T )
+
+
+```
+```{r}
+par(mfrow = c(2,1))
+
+plot(d_all)
+abline(v = thr_deriv)
+
+plot(d_ct)
+abline(v = thr_deriv)
+```
+
+
+```{r}
+# Initialisation
+id_supDERIVglobal <- list()
+Table_mean <- data.frame(matrix(NA, nrow = dim(CT_exp_norm)[1], ncol = 1))
+rownames(Table_mean) <- rownames(CT_exp_norm)
+
+for (i in 1:nrow(Table_mean)) {
+  id_supDERIVglobal <- c(id_supDERIVglobal, 
+                 list(which(log2(1+CT_exp_norm[i,]) > thr_deriv))) # Transfo log2
+}
+
+names(id_supDERIVglobal) <- rownames(Table_mean)
+
+Table_mean$id_supDERIVglobal <- id_supDERIVglobal
+
+head(Table_mean)
+```
+```{r}
+Table_mean[which(rownames(Table_mean) %in% c("HORMAD1", "CT83", "DMRTC2", "ACTL8", 
+                                             "TDRD1", "LRGUK", "TEX14")),"id_supDERIVglobal"]
+```
+
+
+# Heatmap
+## CT : Prepare data
+
+```{r}
+# Annotation samples : 
+clab <- data.frame( IHC = AnnotationINVADE$IHC_Classe_histomoleculaire,
+                  Type = AnnotationINVADE$Type,
+                  Age = AnnotationINVADE$Age)
+
+
+
+#reclassif levels : 
+clab$Type <- clab$Type %>% as.character() 
+clab$Type[which(clab$Type == "PIK_ microinf")] <- "microinf"
+clab$Type <- clab$Type %>% as.factor() 
+
+clab$IHC <- clab$IHC %>% as.character()
+clab$IHC[which(clab$IHC == "lum B / HER2+")] <- "lumB / HER2+"
+clab$IHC <- factor(clab$IHC, levels = c("lum A", "lum B", "lumB / HER2+", "HER2+", "TN"))
+
+head(clab)
+```
+
+
+```{r}
+# Grep index for the top20 CT genes based on random forest
+Top20 <- c("HORMAD1", "CT83", "DMRTC2", "LRGUK", "RFPL4B", "DNAJC5B", "TEX14", "TDRD1", "ACTL8", "SLC1A6", "EDDM3B", "RNF148", "GDF9", "LYPD4", "RGAG1", "CAGE1", "EFCAB5", "STAG3", "SPAG6", "CAGE1", "CSH2")
+
+id <- which(rownames(data_norm) %in% Top20 ==TRUE)
+
+length(id)
+```
+
+ 
+Using the defined threshold to binarize expression
+```{r}
+dt_select <- data_norm[id,]
+
+for (i in 1:nrow(dt_select)) {
+  gene_id <- which(rownames(Table_mean) == rownames(dt_select)[i])
+  if (length(unlist(Table_mean$id_supDERIVglobal[gene_id])) != 0) {
+
+       dt_select[i,-unlist(Table_mean$id_supDERIVglobal[gene_id])] <- 0
+       dt_select[i,unlist(Table_mean$id_supDERIVglobal[gene_id])] <- 1
+  }else{
+     dt_select[i,] <- 0
+  }
+
+}
+
+dim(dt_select)
+```
+ 
+
+
+##heatmap
+
+```{r}
+#Choisir les méthodes de clustering
+Method_dist= "euclidean" #"pearson"
+Method_asso="complete"
+
+#Anno colonnes
+ha= HeatmapAnnotation(df = clab,
+                      annotation_legend_param = list(title_gp = gpar(fontsize = 8),
+        labels_gp = gpar(fontsize = 6),grid_height = unit(5, "mm")),
+        col = list(IHC = c("lum A" = "yellow", "lum B" = "orange", "lumB / HER2+" = "green4", 
+                           "HER2+" = "cyan4", "TN" = "pink4"),
+
+               Type = c("in situ" = "grey70", "infiltrant" = "grey10", "microinf" = "grey40"),
+               Grade = c("1" = "skyblue", "2" = "blue2", "3" = "blue4",
+                         "bas grade" = "skyblue", "intermediaire" = "blue2", "haut grade" = "blue4")),
+        gp = gpar(col = "black"))
+
+
+
+#Choose clustering method
+Method_dist= "binary" 
+Method_asso="ward.D2"
+
+h1 = Heatmap(as.matrix(dt_select),
+   name="Selected CT",
+
+   row_dend_reorder = T,
+   clustering_distance_columns  = Method_dist,
+   clustering_method_columns = Method_asso,
+   cluster_rows    = F,
+   column_title = "Selected CT", #title
+   column_title_gp = gpar(fontsize = 10),
+    col = colorRamp2(c(0,1), 
+                     c("white","red")),   
+  row_title_gp = gpar(fontsize = c(6,6)),
+    show_column_names = T, 
+    show_row_names = T, 
+    row_names_gp = gpar(fontsize = 8),
+    column_names_gp =  gpar(fontsize = 4),
+    
+   top_annotation = ha, 
+
+   show_heatmap_legend = T,
+   heatmap_legend_param = list(legend_direction = "vertical",
+   legend_width = unit(3, "cm"), title_position = "topcenter",
+  fontsize = 6))
+h1
+```
+
+
+
+
+
+
