@@ -1,0 +1,85 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This script generate as output the figure 4H: Gene set enrichment analysis of CCLE dataset, using the HMLE_HORMAD_CT83 signature. 
+We start from the signature and the list of differentially expressed genes between HORMAD1-CT83-positive TNBC cell lines and HORMAD-CT83-negtaive TNBC cell lines. This list was generated using DESeq2 package.
+
+# Librairies
+```{r}
+
+library(clusterProfiler)
+library(enrichplot)
+library(msigdbr)
+library(Cairo)
+library(ggplot2)
+
+```
+
+
+# Data
+
+```{r}
+signature <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210107_RNAseq_HMLE_Hormad1CT83_Blasti/GSEA/H1_CT83_DEGs_signif.rnk", header=FALSE)
+
+DEA_TNBC_ON_vs_OFF <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/191001_GDSC2/DEA/DEA_TNBC_ON_vs_OFF.txt", header=TRUE)
+```
+
+```{r}
+# Data formating
+
+tab <- data.frame(DEA_TNBC_ON_vs_OFF$symbol
+                 DEA_TNBC_ON_vs_OFF$log2FoldChange)
+
+colnames(tab) <- c("Symbol", "Fold-Change")
+
+gene_list = tab$`Fold-Change`
+names(gene_list) = tab$Symbol
+gene_list = sort(gene_list, decreasing = T)
+gene_list = gene_list[-which(duplicated(names(gene_list))==TRUE)]
+
+length(gene_list)
+```
+
+
+```{r}
+# GTM formating
+sign_t2g <-  data.frame(gs_name = rep("Signature_Hormad1_CT83_HMLE", nrow(signature)),
+                        gene_symbol = signature$V1) %>% 
+  dplyr::select(gs_name, gene_symbol)
+
+head(sign_t2g)
+
+```
+```{r}
+
+# run the analysis
+em2 <- GSEA(gene_list, 
+            TERM2GENE = sign_t2g, 
+            minGSSize = 1, 
+            maxGSSize = 500,
+            nPerm = 1000,
+            pvalueCutoff = 0.05,
+            by = "fgsea")
+head(em2)
+```
+
+```{r}
+
+
+gSEAlist <- list()
+  
+win.metafile(paste("GSEA",em2$Description[1],".wmf", sep = "_"))
+
+gSEAlist <- gseaplot(em2, by = "all", title = em2$Description[1], geneSetID = 1)
+
+dev.off()
+ggsave(paste("GSEA",em2$Description[1],".wmf", sep = "_"),
+       device=cairo_ps, 
+       gSEAlist)
+
+
+gSEAlist
+```
+

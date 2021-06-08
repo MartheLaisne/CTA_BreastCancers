@@ -1,0 +1,918 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+# Intro 
+
+## Libraries
+```{r message=FALSE, warning=FALSE}
+library(GenomicDataCommons)
+
+library(stringr)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(AnnotationHub)
+
+library(Seurat)
+
+library(umap)
+library(Rtsne)
+library(factoextra)
+library(ggplot2)
+```
+
+##Data
+
+
+Define the source directory for aligned files
+```{r}
+setwd("~/Desktop/scRNAseq_htseq/modif")
+```
+
+
+
+```{r}
+# Intialisation : read the first file
+dat = readHTSeqFile("SRR7666346.txt")
+
+
+# Read all the Hteseq output files. 
+data<-do.call(cbind, lapply(list.files(pattern = ".txt"), 
+                            readHTSeqFile, 
+                            header=F))
+
+# To make the dataframe
+data_sc = data[,seq(2, ncol(data), 2)]
+names_sample <- c(list.files(pattern = ".txt"))# named according to their titles
+
+colnames(data_sc) <-  list.files(pattern = ".txt") %>% str_sub(., end = -5)
+rownames(data_sc) <- dat$feature
+
+data_sc <- data_sc[1:c(nrow(data_sc) - 5),]
+
+
+# Annotations and labesl
+meta_data <- data[c(nrow(data) - 4):nrow(data), seq(2, ncol(data), 2)] %>% t
+colnames(meta_data) <- c("no_feature", "ambigous", "too_low_aQual", "not_aligned", "alignment_not_unique")
+rownames(meta_data) <- colnames(data_sc) 
+alignes <- unlist(apply(data_sc, 2, sum)) 
+meta_data <- cbind(meta_data, alignes=data.frame(alignes)$alignes)
+
+meta_data <- data.frame(meta_data, samples = rownames(meta_data))
+
+head(meta_data)
+
+rm(data)
+rm(dat)
+
+data_sc[1:5, 1:5]
+data_sc %>% colnames %>% tail
+```
+```{r}
+SraRunTable_GSE118389 <- read.delim("~/Doc_GSE/SraRunTable_GSE118389_2.txt")
+```
+
+
+```{r}
+SraRunTable_GSE118389 %>% head
+
+SraRunTable_GSE118389_sub <- subset(SraRunTable_GSE118389, Run %in% colnames(data_sc))
+
+```
+
+
+
+```{r}
+#Download metadatas: the cel type annotation as in the original publication
+pd_epith <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/pd_epith.RDS")
+
+pd_ct <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/pd_ct.RDS")
+
+
+# Merge metadatas
+pd_epith$names <- rownames(pd_epith)
+pd_ct$names <- rownames(pd_ct)
+
+pd_tot <- merge.data.frame(pd_ct, pd_epith,
+                           by.x ="names", by.y = "names", all = T)
+head(pd_tot)
+```
+
+```{r}
+# Metadata about SRA
+
+SraRunTable_GSE118389 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/SraRunTable_GSE118389.txt")
+
+rownames(data_sc) %>% head
+str_locate(rownames(data_sc), "\\.")[,1] %>% head
+
+end_names <- str_locate(rownames(data_sc), "\\.")[,1] 
+
+data_sc %>% rownames %>% str_sub(., 1, c(end_names-1)) %>% head
+```
+
+Warning: how are nammed mitochondrial genes
+```{r}
+query(AnnotationHub(), "EnsDb.Hsapiens.")
+
+edb <- AnnotationHub()[["AH64446"]]
+
+genes(edb, filter = ~ seq_name == "MT") # Ok: we have correctly annotated mitochondrial transcripts
+
+data_sc$ens_c <- data_sc %>% rownames
+data_sc$ens <- data_sc %>% rownames %>% str_sub(., 1, c(end_names-1)) 
+
+data_sc$symbol <- mapIds(edb,
+                     keys = data_sc$ens,
+                     column="SYMBOL",
+                     keytype="GENEID",
+                     multiVals="first") %>% unlist
+
+data_sc$entrez <- mapIds(edb,
+                     keys=data_sc$ens,
+                     column="ENTREZID",
+                     keytype="GENEID",
+                     multiVals="first") %>% unlist
+
+
+data_sc[1:5, 661:664 ] %>% tail
+```
+
+```{r}
+data_sc$symbol[grep("^MT-", data_sc$symbol)]
+
+grep("^MT\\.", rownames(data_sc_seurat))
+
+# we need to change "-" to "."
+```
+
+
+
+
+
+
+# Seurat
+```{r}
+
+#Loading a dataset
+data_sc_seurat <- data_sc
+rownames(data_sc_seurat) <- make.names(data_sc$symbol, unique = T)
+
+
+tnbc <- CreateSeuratObject(counts = data_sc_seurat[,1:c(ncol(data_sc_seurat) - 4)], project = "tnbc3k", min.cells = 3, min.features = 200)
+tnbc
+```
+
+## Filters
+
+QC and selecting cells for further analysis
+
+Seurat allows you to easily explore QC metrics and filter cells based on any user-defined criteria. A few QC metrics commonly used by the community include
+
+The number of unique genes detected in each cell.
+      -  Low-quality cells or empty droplets will often have very few genes
+      -  Cell doublets or multiplets may exhibit an aberrantly high gene count
+    Similarly, the total number of molecules detected within a cell (correlates strongly with unique genes)
+    The percentage of reads that map to the mitochondrial genome
+      -  Low-quality / dying cells often exhibit extensive mitochondrial contamination
+      -  We calculate mitochondrial QC metrics with the PercentageFeatureSet function, which calculates the percentage of counts originating from a set of features
+      -  We use the set of all genes starting with MT- as a set of mitochondrial genes
+      
+      
+```{r}
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+tnbc[["percent.mt"]] <- PercentageFeatureSet(tnbc, pattern = "^MT\\.")
+```
+
+Where are QC metrics stored in Seurat?
+
+ 
+
+In the example below, we visualize QC metrics, and use these to filter cells.
+
+  We filter cells that have unique feature counts over 2,500 or less than 200
+  We filter cells that have >5% mitochondrial counts
+  
+```{r}
+# Visualize QC metrics as a violin plot
+VlnPlot(tnbc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(tnbc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(tnbc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+```
+
+```{r}
+tnbc <- subset(tnbc, subset = nFeature_RNA > 200 & nFeature_RNA < 10000 & percent.mt < 20)
+
+VlnPlot(tnbc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+```
+
+
+## Normalisation
+
+After removing unwanted cells from the dataset, the next step is to normalize the data. By default, we employ a global-scaling normalization method â€œLogNormalizeâ€ that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. Normalized values are stored in tnbc[["RNA"]]@data.
+
+
+```{r}
+tnbc <- NormalizeData(tnbc, normalization.method = "LogNormalize", scale.factor = 10000)
+
+```
+
+
+
+```{r}
+tnbc <- FindVariableFeatures(tnbc, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(tnbc), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(tnbc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+```
+
+```{r}
+all.genes <- rownames(tnbc)
+tnbc <- ScaleData(tnbc, features = all.genes)
+```
+
+
+## Cluster the cells
+
+On the 10 first components of the PCA
+```{r}
+tnbc <- RunPCA(tnbc, features = VariableFeatures(object = tnbc))
+
+DimPlot(tnbc, reduction = "pca")
+```
+
+```{r}
+tnbc <- FindNeighbors(tnbc, dims = 1:10)
+tnbc <- FindClusters(tnbc, resolution = 0.5)
+```
+```{r}
+# Look at cluster IDs of the first 5 cells
+head(Idents(tnbc), 5)
+```
+
+
+
+```{r}
+tnbc <- RunUMAP(tnbc, dims = 1:10)
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(tnbc, reduction = "umap", pt.size = 3)
+```
+
+## Customed UMAP
+```{r}
+dt <- GetAssayData(object = tnbc, slot = 'scale.data') %>% t
+
+
+#Configuration UMAP
+custom.config = umap.defaults
+
+custom.config$random_state = 42 #seed
+custom.config$transform_state = 42
+
+custom.config$n_components = 2
+custom.config$min_dist=0.3 #min_dist: The effective minimum distance between embedded points. Smaller values will result in a more clustered/clumped embedding.
+custom.config$n_epochs=250 #n_epochs: The number of training epochs to be used in optimizing the low dimensional embedding. Larger values result in more accurate embeddings.
+custom.config$n_neighbors=50 #n_neighbors: The size of local neighborhood
+custom.config
+custom.config$spread = 1
+custom.config$metric = "pearson"
+
+umap = umap(dt, custom.config)
+
+
+plot(umap$layout, col = "black",  pch=21,cex=2.0,cex.lab = 1.7,cex.axis=2.0,xlab="umap1", ylab="umap2")
+```
+
+## Figure 1G without cell types
+
+```{r}
+#UMAP coordinates
+dataGG <- data.frame(umap$layout)
+
+# Sample names
+dataGG$names <- rownames(umap$layout)
+
+
+#C/T genes in tnbc expression
+dataGG$hormad <- dt[rownames(dt) %in% dataGG$names,
+                      which(colnames(dt) == "HORMAD1") ]
+
+dataGG$CT83 <- dt[rownames(dt) %in% dataGG$names,
+                      which(colnames(dt) == "CT83") ]
+
+
+```
+
+
+```{r}
+
+gCT83 = ggplot(data = dataGG, aes(x =X1, y = X2, color = CT83 ))+
+  geom_point(size = 4, shape = 1)+
+  scale_color_gradient(low="grey80", high="red")+ 
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("CT83 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+gHORMAD = ggplot(data = dataGG, aes(x =X1, y = X2, color = hormad ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Hormad1 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+  
+library(gridExtra)
+grid.arrange(gCT83, gHORMAD)
+```
+
+
+
+# Cell types
+https://github.com/Michorlab/tnbc_scrnaseq/blob/master/code/funcs_markers.R
+
+## Functions
+```{r}
+## functions to identify cell types based on markers
+
+# function to find which markers are expressed by cells in an expression matrix
+# returns list of lists, length of each list = the number of cells in the matrix
+lists_markers <- function(mat_here, thresh, markers){
+  
+  epithelial_cells <- list()
+  immune_cells <- list()
+  other_cells <- list()
+  
+  for (j in 1:ncol(mat_here)) {
+    
+    x <- mat_here[, j]
+    
+    vec_epithelial <- c()
+    vec_immune <- c()
+    vec_other  <- c()
+    
+    for (i in 1:nrow(markers)) {
+      
+      name_marker <- markers[i, "gene"]
+      eval(parse(text = paste(name_marker, "_in <- which(rownames(mat_here) == ", 'as.character(name_marker)', ")", sep = "")))
+      
+      eval(parse(text = paste("if (x[", name_marker,"_in] > thresh) {vec_", markers[i, "type_long"], " <- c(vec_", markers[i, "type_long"], ", ", 'as.character(name_marker)', 
+                              "); names(vec_", markers[i, "type_long"], ")[length(vec_", markers[i, "type_long"], ")] <- ", 
+                             'as.character(markers[i, "type"])', "}", sep = "")))
+    }
+    
+    epithelial_cells[[length(epithelial_cells) + 1]] <- if (length(vec_epithelial)) vec_epithelial else list(NULL)
+    immune_cells[[length(immune_cells) + 1]] <- if (length(vec_immune)) vec_immune else list(NULL)
+    other_cells[[length(other_cells) + 1]] <- if (length(vec_other)) vec_other else list(NULL)
+    
+  }
+  
+  names(epithelial_cells) <- colnames(mat_here)
+  epithelial_cells <- lapply(epithelial_cells, function(x){unlist(x)})
+  
+  names(immune_cells) <- colnames(mat_here)
+  immune_cells <- lapply(immune_cells, function(x){unlist(x)})
+  
+  names(other_cells) <- colnames(mat_here)
+  other_cells <- lapply(other_cells, function(x){unlist(x)})
+  
+  return(lists_cells = list("epithelial_cells" = epithelial_cells, "immune_cells" = immune_cells, "other_cells" = other_cells))
+}
+
+
+```
+
+
+```{r}
+# decide whether the cells with markers are epithelial by the rules
+# returns vector binary, length number of cells in the list
+decide_is_epithelial <- function(list_epithelial_markers){
+  
+  mat_is_epithelial <- sapply(list_epithelial_markers, function(x){
+    if (length(x) >= 2)
+      return(1)
+    return(0)
+  })
+  
+  return(mat_is_epithelial)
+}
+
+
+```
+
+```{r}
+# decide whether the cells with markers are immune by the rules
+# returns vector binary, length number of cells in the list
+decide_is_immune <- function(list_immune_markers){
+  
+  mat_is_immune <- sapply(list_immune_markers, function(x){
+    
+    # no marker was found
+    if (length(x) == 0)
+      return(0)
+    # only one single marker (either specific or unspecific) --> not enough evidence
+    if (length(unique(x)) == 1)
+      return(0)
+    # only one type with at least 2 markers (without PTPRC) --> that type
+    if (length(x) > 1 & length(unique(names(x))) == 1)
+      return(unique(names(x)))
+    # only one type with at least 1 marker, and PTPRC --> that type
+    if (length(unique(names(x))) == 2 && "PTPRC" %in% unique(names(x)))
+      return(setdiff(unique(names(x)), "PTPRC"))
+    # more markers of different types
+    if (length(unique(names(x))) > 1) {
+      names_cells <- sort(table(names(x)), decreasing = TRUE)
+      # one marker is prevalent
+      if (names_cells[1] >= 3 && names_cells[2] < 2)
+        return(names(names_cells)[1])
+      else
+        return("immune_mix")
+    }
+  })
+  
+  return(mat_is_immune)
+}
+
+```
+
+
+
+```{r}
+
+
+# decide whether the cells with markers are stroma, endothelial or adipocytes by the rules
+# returns vector binary, length number of cells in the list
+decide_is_other <- function(list_other_markers){
+  
+  mat_is_other <- sapply(list_other_markers, function(x){
+    # no marker was found
+    if (length(x) == 0)
+      return(0)
+    # only one marker was found --> not enough evidence
+    if (length(x) == 1)
+      return(0)
+    # more than one marker of the same type --> that type
+    if (length(x) > 1 & length(unique(names(x))) == 1)
+      return(unique(names(x)))
+    # both types
+    if (length(unique(names(x))) > 1) {
+      names_cells <- sort(table(names(x)), decreasing = TRUE)
+      # one marker is prevalent
+      if (names_cells[1] >= 3 && names_cells[2] < 2)
+        return(names(names_cells)[1])
+      else
+        return("other_mix")
+    }
+  })
+  return(mat_is_other)
+}
+
+```
+
+
+
+
+```{r}
+
+# function to evaluate the distribution of expression for the cases in which cells only have one epithelial marker expressed
+# type_test indicates whether we should look at the distribution of that markers in the cells from only one patient or from all patients
+# thrsh_percent is the how high the expression should be, as a fraction
+expression_one_epithelial_marker <- function(mat_here, pd_here, is_epithelial, epithelial_markers, type_test, thresh_percent){
+  
+  cdfspats_is_epithelial <- list()
+  cdfsall_is_epithelial <- list()
+  exprs_is_epithelial <- list()
+  for (i in 1:length(is_epithelial)) {
+    # if the cell is not already epithelial
+    if (is_epithelial[i] == 0) {
+      # but has some epithelial markers
+      if (!is.null(epithelial_markers[[i]])) {
+        name_cell <- names(epithelial_markers)[i]
+        patient <- pd_here$patient[grep(name_cell, colnames(mat_here))]
+        all_cells_pat <- colnames(mat_here)[which(pd_here$patient == patient)]
+        # indices of the current patient among the cells that are epithelial by markers
+        idx_cells_pat_here <- na.omit(match(all_cells_pat, colnames(mat_here)[which(is_epithelial == 1)]))
+        
+        cdfs_pats <- rep(NA, length(epithelial_markers[[i]]))
+        names(cdfs_pats) <- epithelial_markers[[i]]
+        cdfs_all <- rep(NA, length(epithelial_markers[[i]]))
+        names(cdfs_all) <- epithelial_markers[[i]]
+        exprs_j_cell <- rep(NA, length(epithelial_markers[[i]]))
+        names(exprs_j_cell) <- epithelial_markers[[i]]
+        
+        for (j in 1:length(epithelial_markers[[i]])) {
+          # expression of the current cell for the current epithelial marker
+          exprs_j_cell[j] <- mat_here[which(rownames(mat_here) == epithelial_markers[[i]][j]), i]
+          exprs_j_pats <- mat_here[,which(is_epithelial == 1)][which(rownames(mat_here) == epithelial_markers[[i]][j]), idx_cells_pat_here]
+          w_pats <- ecdf(exprs_j_pats)
+          cdfs_pats[j] <- w_pats(exprs_j_pats[j])
+          
+          exprs_j_all <- mat_here[,which(is_epithelial == 1)][which(rownames(mat_here) == epithelial_markers[[i]][j]), ]
+          w_all <- ecdf(exprs_j_all)
+          cdfs_all[j] <- w_all(exprs_j_all[j])
+        }
+        
+        exprs_is_epithelial[[i]] <- exprs_j_cell
+        cdfspats_is_epithelial[[i]] <- cdfs_pats
+        cdfsall_is_epithelial[[i]] <- cdfs_all
+      }
+    }
+  }
+  
+  for (i in 1:length(cdfsall_is_epithelial)) {
+    if (type_test == "all") {
+      is_epithelial_extra <- sapply(cdfsall_is_epithelial, function(x){if (!is.null(x) && names(x) %in% c("EPCAM", markers$gene[grep("KRT", markers$gene)]) && x > thresh_percent) return(1) else return(0)})
+    }
+    
+    if (type_test == "pats") {
+      is_epithelial_extra <- sapply(cdfspats_is_epithelial, function(x){if (!is.null(x) && names(x) %in% c("EPCAM", markers$gene[grep("KRT", markers$gene)]) && x > thresh_percent) return(1) else return(0)})
+    }
+  }
+  
+  return(list("exprs_is_epithelial" = exprs_is_epithelial, "cdfspats_is_epithelial" = cdfspats_is_epithelial, 
+              "cdfsall_is_epithelial" = cdfsall_is_epithelial, "is_epithelial_extra" = is_epithelial_extra, "type_test" = type_test, "thresh_percent" = thresh_percent))
+}
+```
+
+
+## Data
+
+
+Markers
+```{r}
+markers_clean <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/markers_clean.txt")
+Lehmann_signature <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/Lehmann_signature.txt")
+
+```
+
+
+```{r}
+dt = GetAssayData(object = tnbc, slot = 'data') 
+
+boxplot(dt[which(rownames(dt) %in% subset(markers_clean, type_long == "epithelial")$gene),][3,])
+```
+
+
+```{r}
+SraRunTable_GSE118389 <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/SraRunTable_GSE118389.txt")
+
+SraRunTable_GSE118389 %>% head
+```
+```{r}
+SraRunTable_GSE118389_sub <- subset(SraRunTable_GSE118389, Run %in% colnames(dt))
+
+SraRunTable_GSE118389_sub <- SraRunTable_GSE118389_sub[-which(duplicated(SraRunTable_GSE118389_sub$Run)==T),]
+
+SraRunTable_GSE118389_sub %>% head
+```
+
+```{r}
+pd_info <- data.frame(name_sample = colnames(dt))
+
+pd_info <- merge.data.frame(pd_info, SraRunTable_GSE118389_sub,
+                            by.x = "name_sample", by.y = "Run", all.x = T, all.y = F)
+
+head(pd_info)
+```
+
+## Cell types
+
+```{r}
+## cell types by markers (done as described in SI of paper)
+thresh <- 1
+cells_markers <- lists_markers(mat_here = dt, 
+                               thresh = thresh , 
+                               markers = markers_clean[-which(markers_clean$gene %in% c("KRT6" , "SERPINB3")),])
+epithelial_markers <- cells_markers$epithelial_cells
+is_epithelial <- decide_is_epithelial(epithelial_markers)
+immune_markers <- cells_markers$immune_cells
+is_immune <- decide_is_immune(immune_markers)
+other_markers <- cells_markers$other_cells
+is_other <- decide_is_other(other_markers)
+
+#markers = markers_clean
+one_epithelial_marker <- expression_one_epithelial_marker(mat_here = dt, pd_here = pd_info,
+                                                          is_epithelial, epithelial_markers, 
+                                                          "pats", 0.5)
+is_epithelial[which(one_epithelial_marker$is_epithelial_extra == 1)] <- 1
+
+is_epithelial_simple <- is_epithelial
+is_epithelial_simple[which(is_epithelial == 1)] <- "epithelial"
+is_immune_simple <- is_immune
+is_immune_simple[which(is_immune == "immune_mix")] <- 0
+is_other_simple <- is_other
+is_other_simple[which(is_other == "other_mix")] <- 0
+
+cells_types <- paste(is_epithelial_simple, is_immune_simple, is_other_simple, sep = "_")
+names(cells_types) <- names(is_epithelial)
+cell_types <- sapply(strsplit(cells_types, "_"), function(x){
+  # none of the cell types (epithelial, immune, other)
+  if (sum(x == 0) == 3) return("unknown") else 
+    if (sum(x == 0) == 2) return(setdiff(x, "0")) else
+      if (sum(c("epithelial", "stroma", "0") %in% x) == 3) return("epithelial") else
+        return(paste(setdiff(x, "0"),collapse = "_"))})
+cell_types_simple <- cell_types
+cell_types_simple[which(sapply(strsplit(cell_types, "_"), length) > 1)] <- "undecided"
+table(cell_types_simple)
+
+```
+
+
+
+
+```{r}
+# update colData and pd_norm
+pd_info$cell_types_markers <- cell_types_simple
+
+pd_info$cluster = dataGG$cluster
+
+```
+
+
+
+
+## UMAP Cell types: Figure 1G
+```{r}
+g1 = ggplot(data = dataGG, aes(x =X1, y = X2, 
+                               color = as.factor(pd_info$cell_types_markers) ))+
+  geom_point(size = 4, shape = 21) +
+  scale_color_manual(values = c("steelblue3", "darkgreen", "black", "cyan", "chartreuse3", "skyblue2", "grey40", "grey40"), na.translate = FALSE) +
+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Cell Types cl all") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+g1
+```
+
+## Statistics
+
+What proportion of the dataset are cancer cells? 
+```{r}
+id_count <- which(pd_info2$cell_types_markers[id_tum] == "epithelial")
+
+length(id_count)/length(id_tum)*100
+```
+
+What proportion of these cancer celles are CT83-positive? 
+```{r}
+length(which(dataGG[id_tum[id_count],]$CT83>0))/length(dataGG[id_tum[id_count],]$CT83)*100
+```
+
+What proportion of these cancer celles are HORMAD1-positive? 
+
+```{r}
+length(which(dataGG[id_tum[id_count],]$hormad>0))/length(dataGG[id_tum[id_count],]$CT83)*100
+
+```
+
+
+What proportion of these cancer celles are CT83 & HORMAD1-positive? 
+
+```{r}
+length(which(dataGG[id_tum[id_count],]$hormad>0 & dataGG[id_tum[id_count],]$CT83>0))/length(dataGG[id_tum[id_count],]$CT83)*100
+
+```
+
+```{r}
+#Bartlett test of homogeneity of variances
+bartlett.test(log2(1+dataGG$hormad), pd_info2$cell_types_markers) #p-value < 2.2e-16
+
+kw1 <- kruskal.test( x = log2(1+dataGG$hormad[]), 
+                     g = as.factor(pd_info2$cell_types_markers[])
+                    )
+kw1
+pairwise.wilcox.test(x = log2(1+dataGG$hormad[]), 
+                     g = as.factor(pd_info2$cell_types_markers[]))
+
+
+```
+
+==> HORMAD1 is significantly enriched in the cancer cell population, comared to microenvironnement
+
+```{r}
+#Bartlett test of homogeneity of variances
+bartlett.test(log2(1+dataGG$CT83), pd_info2$cell_types_markers) #p-value < 2.2e-16
+
+kw1 <- kruskal.test( x = log2(1+dataGG$CT83[]), 
+                     g = as.factor(pd_info2$cell_types_markers[])
+                    )
+kw1
+pairwise.wilcox.test(x = log2(1+dataGG$CT83[]), 
+                     g = as.factor(pd_info2$cell_types_markers[]))
+
+```
+
+==> CT83 is significantly enriched in the cancer cell population, comared to microenvironnement
+
+
+#Lehman signature
+
+```{r}
+
+## Lehman signature
+lehman_long <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/190801_scRNAseq_PMC6123496/Lehmann_signature.txt")
+for (i in 0:5) {
+  
+  gene <- "gene"
+  regulation <- "regulation"
+  no_samples <- "no_samples"
+  signature <- "signature"
+  
+  if (i == 0) {
+    lehman <- lehman_long[, 1:4]
+    lehman <- lehman[-which(lehman$signature == ""),]
+  }
+  
+  if (i > 0) {
+    gene <- paste("gene", i, sep = ".")
+    regulation <- paste("regulation", i, sep = ".")
+    no_samples <- paste("no_samples", i, sep = ".")
+    signature <- paste("signature", i, sep = ".")
+    
+    mat_to_bind <- lehman_long[, c(gene, regulation, no_samples, signature)]
+    colnames(mat_to_bind) <- c("gene", "regulation", "no_samples", "signature")
+    if (length(which(is.na(mat_to_bind$no_samples))) > 0 )
+      mat_to_bind <- mat_to_bind[-which(mat_to_bind$signature == ""),]
+    lehman <- rbind(lehman, mat_to_bind)
+  }
+}
+
+lehman <- tbl_df(lehman) %>%
+  group_by(signature)
+
+lehman <- lehman[which(!is.na(match(lehman$gene, rownames(dt)))),]
+
+lehman_signatures <- unique(lehman$signature)
+
+head(lehman)
+```
+On prend la liste de gènes signatures, on fait la moyenne d'expression des gènes des Up et des Down (séparément), par signature, pour chaque ech.
+On calcule UP - DOWN = Score
+Max(Score) donne l'identité
+
+
+```{r}
+
+lehman_avg_exps <- apply(dt, 2, function(x){
+  
+  mns <- matrix(NA, nrow = length(lehman_signatures), ncol = 2)
+  rownames(mns) <- lehman_signatures
+  for (s in 1:length(lehman_signatures)) {
+    sign <- lehman_signatures[s] # current signature
+    lehman_here <- lehman %>%
+      dplyr::filter(signature == sign)
+    lehman_here_up <- lehman_here %>%
+      dplyr::filter(regulation == "UP")
+    lehman_here_down <- lehman_here %>%
+      dplyr::filter(regulation == "DOWN")
+    
+    # indices of genes in the expression matrix
+    idx_genes_up <- match(lehman_here_up$gene, rownames(dt)) 
+    idx_genes_down <- match(lehman_here_down$gene, rownames(dt))
+    
+    mns[s,] <- c(mean(x[idx_genes_up]), mean(x[idx_genes_down]))
+  }
+  return(mns)
+})
+
+all.equal(colnames(lehman_avg_exps), pd_info$name_sample)
+lehman_avg_exprs_epithelial <- lehman_avg_exps[,which(pd_info$cell_types_markers == "epithelial")]
+
+lehman_avg_ups <- lehman_avg_exps[c(1:6), ]
+rownames(lehman_avg_ups) <- lehman_signatures
+all.equal(colnames(lehman_avg_ups), rownames(pd_info))
+lehman_avg_ups_epithelial <- lehman_avg_ups[,which(pd_info$cell_types_markers == "epithelial")]
+
+lehman_avg_downs <- lehman_avg_exps[c(7:12),]
+rownames(lehman_avg_downs) <- lehman_signatures
+all.equal(colnames(lehman_avg_downs), rownames(pd_info))
+lehman_avg_downs_epithelial <- lehman_avg_downs[,which(pd_info$cell_types_markers == "epithelial")]
+
+lehman_avg_both <- lehman_avg_ups - lehman_avg_downs
+all.equal(colnames(lehman_avg_both), rownames(pd_info))
+lehman_avg_both_epithelial <- lehman_avg_both[,which(pd_info$cell_types_markers == "epithelial")]
+
+assignments_lehman_both <- apply(lehman_avg_both, 2, function(x){rownames(lehman_avg_both)[which.max(x)]})
+assignments_lehman_both_epithelial <- assignments_lehman_both[which(pd_info$cell_types_markers == "epithelial")]
+
+# update lehman signatures by removing the immunomodulatory and mesenchymal_stem_like signatures
+lehman_avg_both_epithelial_new <- lehman_avg_both_epithelial[-which(rownames(lehman_avg_both_epithelial) %in% c("immunomodulatory", "mesenchymal_stem_like")),]
+assignments_lehman_both_epithelial_new <- apply(lehman_avg_both_epithelial_new, 2, function(x){rownames(lehman_avg_both_epithelial_new)[which.max(x)]})
+
+head(assignments_lehman_both_epithelial_new)
+```
+
+
+
+## Figure 4K: boxplot Lehman
+```{r}
+assignments_lehman_both_epithelial_new_dt = data.frame(assignments_lehman = assignments_lehman_both_epithelial)
+assignments_lehman_both_epithelial_new_dt$sample_name <- rownames(assignments_lehman_both_epithelial_new_dt)
+
+# update colData and pd_norm
+pd_info2 <- merge.data.frame(pd_info, assignments_lehman_both_epithelial_new_dt,
+                             by.x = "name_sample", 
+                             by.y = "sample_name",
+                             all.y = F, all.x = T)
+
+pd_info2 <- merge.data.frame(pd_info2, data.frame(meta_data),
+                             by.x = "name_sample", 
+                             by.y = "samples",
+                             all.y = F, all.x = T)
+
+
+  
+head(pd_info2)
+```
+
+
+
+
+Subset on a CT83 & HORMAD1 positive tumors
+```{r}
+id_tum <- which(pd_info2$patient == "PT039")
+
+A = pd_info2$assignments_lehman[id_tum]
+
+
+p1 = ggplot(data = dataGG[id_tum,], aes(x = A,  color = A,
+                                y = (CT83) ))+   
+  geom_boxplot(size= 1, outlier.colour = "white")  +
+  geom_jitter(shape = 21, size = 3, position = position_jitter(0.1, 0.1))+
+  annotation_logticks(sides="l")+
+    stat_summary(geom = "point", fun.y = "mean", col = "black", size = 3, shape = 23, fill = "white") +
+scale_color_manual(values=c("orange","red3","navy", 
+                             "green4", "black"))+
+  guides(colour=guide_legend(override.aes=list(size=6))) +
+  xlab("Cell Types") + ylab("Expression values") +
+  ggtitle("CT83") +
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+
+p2 = ggplot(data = dataGG[id_tum,], aes(x =A,  color =A,
+                                y = (hormad) ))+   
+  geom_boxplot(size= 1, outlier.colour = "white")  +
+  geom_jitter(shape = 21, size = 3, position = position_jitter(0.1, 0.1))+
+  annotation_logticks(sides="l")+
+    stat_summary(geom = "point", fun.y = "mean", col = "black", size = 3, shape = 23, fill = "white") +
+scale_color_manual(values=c("orange","red3","navy", 
+                             "green4", "black"))+
+  guides(colour=guide_legend(override.aes=list(size=6))) +
+  xlab("Cell Types") + ylab("Expression values") +
+  ggtitle("HORMAD1") +
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+
+
+
+
+
+
+
+
