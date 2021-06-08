@@ -118,7 +118,7 @@ txTr <- GeneRegionTrack(txdb, chromosome = data$chr[1], start = c(min(data$pos)-
 plotTracks(list(itr, grt, atr, txTr),  shape = "arrow",
     transcriptAnnotation = "symbol")
 
-# Add gene region track V2 using BioMarthe : il faut une connexion r�seau
+# Add gene region track V2 using BioMarthe : il faut une connexion réseau
 biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
                                     chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
                         end = c(max(data$pos)+10^2))
@@ -189,7 +189,7 @@ exp_ct_1 %>% head
 ```
 
 ```{r}
-#On assemble méthylation et expression
+#On assemble mÃ©thylation et expression
 exp_met_ct_1 = data.frame(exp_ct_1, t(met_ct_1))
 exp_met_ct_1 %>% head
 
@@ -317,7 +317,7 @@ txTr <- GeneRegionTrack(txdb, chromosome = data$chr[1], start = c(min(data$pos)-
 plotTracks(list(itr, grt, atr, txTr),  shape = "arrow",
     transcriptAnnotation = "symbol")
 
-# Add gene region track V2 using BioMarthe : il faut une connexion r�seau
+# Add gene region track V2 using BioMarthe : il faut une connexion réseau
 biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
                                     chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
                         end = c(max(data$pos)+10^2))
@@ -388,7 +388,7 @@ exp_ct_1 %>% head
 ```
 
 ```{r}
-#On assemble méthylation et expression
+#On assemble mÃ©thylation et expression
 exp_met_ct_1 = data.frame(exp_ct_1, t(met_ct_1))
 exp_met_ct_1 %>% head
 
@@ -594,8 +594,8 @@ ggplot(data = dt_cor, aes(x = correlation, y = -log10(pvalue)))+
 
   labs(main =  "139 Selected C/T genes: Link with methylation",
         x="R Pearson",y="p-value")+     
-  theme_classic()+                                                     # thème blanc
-  theme(plot.title = element_text(size = 12,hjust=0.5),    #titre en gras, centré
+  theme_classic()+                                                     # thÃ¨me blanc
+  theme(plot.title = element_text(size = 12,hjust=0.5),    #titre en gras, centrÃ©
               text=element_text(),
               axis.title = element_text( size=10),        #titre des axes en gras
               axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
