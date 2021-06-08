@@ -1,0 +1,108 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+We want to know the overlap between the 3 Testis-Specific gene lists, and the contribution of each list to the 139 selected TS genes
+
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres")
+
+
+Wang <- read.table("./data/CT_list_Wang.txt", sep = "\t", dec = ",", header = T)
+
+DataBase <- read.table("./data/data_CTA_list_from_CT_database.txt", sep = "\t", dec = ",", header = T)
+
+Rousseau <- read.table("./data/Data_TSPS_fromRousseau.txt", sep = "\t", dec = ",", header = T)
+
+selected <- read.table("./data/Selected_CT_MeanInf1.txt", sep = "\t", dec = ",", header = T)
+```
+
+
+
+TO resolve some unconsistent notations
+```{r}
+selected$Alias <- selected$gene_id
+selected$Alias = as.character(selected$Alias)
+
+
+selected$Alias[grep("CT83",selected$Alias)] = "CXorf61"
+selected$Alias[grep("EPPIN",selected$Alias)] = "SPINLW1"
+selected$Alias[grep("LIN28AP1",selected$Alias)] = "LIN28A"
+
+selected$Alias[grep("CGB",selected$Alias)] = "CGB5"
+selected$Alias[grep("CGB8",selected$Alias)] = "CGB5"
+
+selected$Alias[grep("CNBD2",selected$Alias)] = "C20orf152"
+selected$Alias[grep("LINC00305",selected$Alias)] = "C18orf20"
+selected$Alias[grep("MEIOB",selected$Alias)] = "C16orf73"
+
+selected$Alias[grep("GAGE2E",selected$Alias)] = "GAGE8"
+selected$Alias[grep("GAGE2D",selected$Alias)] = "GAGE8"
+```
+
+
+Verification : 
+```{r}
+selected$Alias[which(is.element(as.character(selected$Alias), 
+                                c(as.character(Wang$Description),  
+                                  as.character(Rousseau$Gene_Symbol), 
+                                  as.character(DataBase$Family_member )))==FALSE)]
+```
+
+Overlap : 
+
+```{r}
+# 2 by 2 : 
+Wang_DB <- intersect(Wang$Description, DataBase$Family_member)
+Wang_Rou <- intersect(Wang$Description, Rousseau$Gene_Symbol)
+Wang_Selec <- intersect(Wang$Description, selected$Alias)
+
+DB_Rou <- intersect(DataBase$Family_member, Rousseau$Gene_Symbol)
+DB_Selec <- intersect(DataBase$Family_member, selected$Alias)
+
+Rou_Selec <- intersect(Rousseau$Gene_Symbol, selected$Alias)
+
+# 3 : 
+Wang_DB_Rou <- intersect(Wang_DB, Rousseau$Gene_Symbol)
+Wang_DB_Selec <-  intersect(Wang_DB, selected$Alias)
+Wang_Rou_Selec <- intersect(Wang_Rou, selected$Alias)
+
+DB_Rou_Selec<-  intersect(DB_Rou, selected$Alias)
+
+
+# 4 : 
+All4 <- intersect(DB_Rou_Selec, Wang$Description)
+
+All4
+```
+
+HORMAD1 belong to the 4 lists.
+
+
+```{r}
+library(Vennerable)
+
+# Vennerable took list as input
+DataList <- list(Wang = Wang$Description,
+                 CT_Database = DataBase$Family_member,
+                 Rousseau = Rousseau$Gene_Symbol,
+                 Selected = selected$Alias)
+
+str(DataList)
+
+# Object for VennDiag
+VCT <- Venn(DataList)
+VCT
+```
+```{r}
+C4 <- compute.Venn(VCT, doWeights = TRUE, type = "ChowRuskey")
+
+gp <- VennThemes(C4 )
+
+
+plot(VCT, doWeights = TRUE, type = "ChowRuskey", gpList = gp )
+```
+
+
+

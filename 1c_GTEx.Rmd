@@ -1,0 +1,144 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Introduction
+
+Objective : Assess the Testis-Specific pattern of expression for the selected TS genes.
+
+
+Data : RNA-Seq from differents human tissues are downloaded from GTEx website (TPM).
+In this dataframe, I have extracted data for annotated human tissues, and selected CT genes. 
+
+##Librairies
+
+```{r}
+library(stringi)
+library(dplyr)
+
+library(ggplot2)
+
+library(circlize)
+library(ComplexHeatmap)
+```
+
+## Data
+
+```{r}
+setwd("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres")
+
+dat <- read.table('./data/GTEx_SelectedTS.txt', header =TRUE, sep ='\t')
+colnames(dat) <- stri_replace_all(colnames(dat),regex =  "\\.", replacement = "-")
+
+selected <- read.table("./data/Selected_CT_MeanInf1.txt", sep = "\t", dec = ",", header = T)
+
+anno_dat <- read.table("./data/GTEx_anno_SelectedTS.txt", 
+                       header = TRUE, sep = '\t', na.strings = "")
+anno_dat <- anno_dat[which( anno_dat$SAMPID %in% colnames(dat) ), ]
+
+```
+
+
+
+To check if annotation and data are in consistent order : 
+```{r}
+c(as.character(anno_dat$SAMPID) == as.character(colnames(dat))) %>% sum == ncol(dat)
+
+```
+
+# Boxplot 
+
+Reprganize data in ggplot style : 
+
+```{r}
+dt_graph <- data.frame(stack(dat))
+
+dt_graph$SMTS <- rep(anno_dat$SMTS, each = nrow(dat))
+dt_graph$SMTSD <- rep(anno_dat$SMTSD, each = nrow(dat))
+
+dt_graph$names <- rep(rownames(dat), times = ncol(dat))
+head(dt_graph)
+```
+
+Compute median per gene and per tissue with aggregate function : 
+
+```{r}
+dt <- aggregate(values ~ SMTS + names, data = dt_graph, FUN= "median" )
+dt$sd <- aggregate(values ~ SMTS + names, data = dt_graph, FUN= "sd" )$values
+dt$sd_min <- dt$values - dt$sd 
+dt$sd_pos <- dt$values + dt$sd 
+
+head(dt)
+```
+
+Boxplot : median expression, log10 scale
+```{r}
+ggplot(data = dt, aes(x = SMTS, y = values, color = SMTS)) +
+  geom_boxplot(outlier.colour = "white")+
+ # geom_errorbar(data=dt, mapping=aes(x=SMTS, ymin=sd_min, ymax=sd_pos), width=0.2, size=1) +
+  geom_jitter(shape = 19)+
+  
+  scale_color_manual(values = c(rep("black", 23), "red4", rep("black", 3)))+
+  scale_y_log10()+
+  labs(title  =  "139 Selected C/T genes:GTEX",  x="Organs",y="TPM")+ 
+  
+  theme_classic()+                                                     
+  theme(plot.title = element_text(size = 12,hjust=0.5),   
+              text=element_text(),
+              axis.title = element_text( size=10),       
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+```
+
+
+
+
+
+
+
+
+
+# heatmap
+```{r}
+#Compute the median per TS gene and per tissue
+dh <- apply(dat, 1, function(X){by(X, INDICES = anno_dat$SMTS, median)}) %>% t
+
+#Remove 0 values
+dh <-dh[-which(rowSums(dh)==0),]
+
+
+# Scale the matrix (variable = genes, by row)
+mt <- dh[,-1] %>% apply(., 1, scale) %>% t
+
+#Annotations
+rownames(mt) <- rownames(dh)
+colnames(mt) <- colnames(dh)[-1]
+ha = HeatmapAnnotation(Type = colnames(dh)[-1],
+     gp = gpar(col = "black"))
+
+
+# Colors gradient for expression
+col_fun = colorRamp2(c( min(mt,na.rm = T),0,  max(mt, na.rm = T)), c("blue", "white", "red"))
+
+
+
+# EXpression Heatmap
+ht_list = Heatmap(as.matrix(mt),
+        top_annotation = ha,
+        name = "Expression (scale)",
+        col = col_fun,
+        rect_gp = gpar(col = "black", lwd = 0.1),
+        show_column_names = TRUE,
+        row_title = "Selected TS Genes",
+        row_names_gp = gpar(fontsize = 4), 
+       heatmap_legend_param = list(legend_direction = "horizontal"))
+
+draw(ht_list, heatmap_legend_side = "bottom", 
+    annotation_legend_side = "right")
+
+```
+
+
+
