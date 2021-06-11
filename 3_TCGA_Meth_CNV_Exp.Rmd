@@ -1,0 +1,492 @@
+---
+title: "Methylation and Expression with CNV data"
+output: html_notebook
+---
+
+# Intro
+
+## Data
+
+
+Données d'expression : data_brca, données communes = *data_exp*
+données de méthylation : data.hg19, donnée scommunes = *data_met*
+Métadatas : coldata_ens
+
+
+
+```{r}
+load("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190409_Breast_Methylation/190418_corr_Methylation_par_Gene.RData")
+
+
+KEEP=c('Gene_int','annotation.meth','data_met',
+                            'data_exp', 'coldata_ens', 'Subtype' )
+rm(list= ls()[!(ls() %in% KEEP )])
+
+Alter_Sample_Hpos <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190624_CGHBreast/Alter_Sample_Hpos.txt")
+Alter_Sample_Hneg <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190624_CGHBreast/Alter_Sample_Hneg.txt")
+Alter_Sample_CTpos <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190624_CGHBreast/Alter_Sample_CTpos.txt")
+Alter_Sample_CTneg <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190624_CGHBreast/Alter_Sample_CTneg.txt")
+
+
+Subtype <- coldata_ens$subtype_BRCA_Subtype_PAM50
+Subtype <- as.character(Subtype)
+Subtype[which(coldata_ens$shortLetterCode == "NT")] <- "NT"
+Subtype <- as.factor(Subtype)
+
+```
+
+## Librairies
+
+```{r}
+library(SummarizedExperiment)
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(Hmisc)
+library(grid)
+library(Gviz)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+```
+
+
+
+# HORMAD1
+
+Methylation et expression pour HOrmad1
+
+
+```{r}
+#Hormad1's probes
+Gene_int = "HORMAD1"
+
+probes1 = annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),]$probeID
+
+#SUbset methylation for these probes
+met_hormad_1 = subset(data_met, rownames(data_met) %in% probes1)
+
+rownames(met_hormad_1) = paste(annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),
+                                               ]$UCSC_RefGene_Group,
+                               rownames(met_hormad_1), sep="_") # Annotation CpG
+
+#EHORMAD1 Expression / ech
+Gene_int = "HORMAD1"
+
+ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+exp_hormad_1 = subset(data_exp, rownames(data_exp) %in% ENS_Hormad$ENSEMBL)
+dim(exp_hormad_1)
+```
+
+We add CNV information
+
+
+```{r}
+alter_Hormad <- rbind(Alter_Sample_Hpos, Alter_Sample_Hneg)
+
+dim(alter_Hormad) ; dim( t(met_hormad_1))
+```
+
+Vector with expression level
+```{r}
+Subtype_H = coldata_ens$HORMAD1.84072
+
+Subtype_H = as.character(Subtype_H)
+Subtype_H[which(coldata_ens$shortLetterCode == "NT")] = "NT"
+Subtype_H = as.factor(Subtype_H)
+```
+
+```{r}
+exp_hormad_1 = data.frame( expression = c(exp_hormad_1), Statut = Subtype_H, Type = Subtype) 
+
+quant_hormad = quantile(exp_hormad_1$expression, 
+         probs = seq(0, 1, 0.1))
+mini = quant_hormad[2]
+maxi = quant_hormad[10]
+
+exp_hormad_1 <- exp_hormad_1 %>% 
+                mutate(State_quantile = ifelse(exp_hormad_1[,1] <= c(mini), 
+                                               paste("Low", Gene_int, sep = "_"),
+                                        ifelse(exp_hormad_1[,1] >= c(maxi), 
+                                               paste("High", Gene_int, sep = "_"), 
+                                         "NS"
+                                               )
+                                          )
+                      )
+
+#On remplace les NT
+exp_hormad_1$State_quantile[ which(coldata_ens$shortLetterCode=="NT")] <- "NT"
+exp_hormad_1 %>% head
+```
+
+
+```{r}
+#On assemble méthylation et expression
+exp_met_hormad_1 = data.frame(exp_hormad_1, t(met_hormad_1))
+exp_met_hormad_1 %>% head
+
+exp_met_hormad_1 <- data.frame(barcode = rep(coldata_ens$barcode, length(probes1)),
+                               Patient = rep(rownames(exp_met_hormad_1), length(probes1)),
+                               ENSG00000143452 = rep(exp_hormad_1[,1], length(probes1)),
+                               Statut = rep(exp_hormad_1$Statut, length(probes1)),
+                               Type = rep(exp_hormad_1$Type, length(probes1)),
+                               State_quantile = rep(exp_hormad_1$State_quantile, 
+                                                    length(probes1)),
+                               gather(data = exp_met_hormad_1[,5:c(length(probes1)+4)], 
+                                     key = "Cg", 
+                                     value = "meth") )
+
+exp_met_hormad_1 %>% head
+```
+
+On rajoute les infos CNV
+
+```{r}
+merge(alter_Hormad,exp_met_hormad_1, by.x = "Patient", by.y = "Patient", all = T ) %>% head
+
+exp_met_hormad_1 <- merge(alter_Hormad,exp_met_hormad_1, by.x = "Patient", by.y = "Patient", all = T ) 
+```
+
+
+```{r}
+A = "Basal"
+coul = "darkgoldenrod"
+
+g1 = ggplot(data = subset(exp_met_hormad_1, Type == A), 
+       aes(x = log2(1+ENSG00000143452), y = meth, color = CNV ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  scale_y_continuous(limits = c(0,1))+
+  facet_wrap(~Cg) +
+ # scale_color_manual(values=c("red4", "navy","grey50", "black"))+
+  labs(title = paste("Correlation HORMAD1 exp / meth \n", A), y="beta value",x="log2(HORMAD1 expression)",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 9),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+
+Mean methylation at promoter
+
+```{r}
+#Select probes at TSS200 / 5'UTR / 1st exon
+id <- c(grep("TSS200", exp_met_hormad_1$Cg[1:9]),
+        grep("5.UTR", exp_met_hormad_1$Cg[1:9]))
+
+index <- exp_met_hormad_1$Cg[id]
+
+exp_met_hormad_1_sub <- subset(exp_met_hormad_1, Cg %in% index)
+
+Mean_horm <- by(exp_met_hormad_1_sub$meth, exp_met_hormad_1_sub$barcode, mean, na.rm = TRUE)
+
+
+
+Table_mean <- data.frame(barcode = names(c(Mean_horm)),
+                             Patient = coldata_ens$primary,
+                             MoyMet = c(Mean_horm), 
+                             exp = exp_hormad_1$expression,
+                             Statut = exp_hormad_1$Statut,
+                             Type = exp_hormad_1$Type,
+                             State_quantile = exp_hormad_1$State_quantile
+                             )
+
+head(Table_mean)
+```
+
+```{r}
+Table_mean <- merge(alter_Hormad,Table_mean, by.x = "Patient", by.y = "Patient", all = T ) 
+
+
+Table_mean <- data.frame(Table_mean,
+                              fact = Table_mean$CNV * (Table_mean$SegEnd - Table_mean$segmSt))
+
+write.table(Table_mean, "HORMAD1_amp.txt", row.names = F, col.names = T, quote = F, sep = "\t")
+
+```
+
+
+```{r}
+A = "Basal"
+
+
+g1 = ggplot(data = subset(Table_mean, Type == A), 
+       aes(x = log2(1+exp), y = MoyMet, fill = CNV ))+
+  geom_jitter(size = 5, shape = 21, color = "black")+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  scale_fill_gradient2(low = "navy", high = "red4",
+                        na.value = "grey",
+                        limits = c(-1, 1))  + 
+  #scale_color_manual(values=c("black", "red4","grey20"))+
+  labs(title="Correlation Hormad1 exp / Mean TSS200 meth \n Basal (Breast)", y="beta value",x="log2(HORMAD1 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 9),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+```{r}
+library("ggsci")
+
+g1 = ggplot(data = subset(Table_mean, Type == A), 
+       aes(x = log2(1+exp), y = MoyMet, fill = Values ))+
+  geom_point(size = 5, shape = 21, color = "black")+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+ # facet_wrap(~Type) +
+  scale_fill_manual(values = c("#FC4E07", "#00AFBB","white", "grey"),
+                                na.translate = TRUE, na.value = "grey") +
+  labs(title="Correlation Hormad1 exp / Mean TSS200 meth \n Basal (Breast)", y="beta value",x="log2(HORMAD1 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+
+
+
+
+
+# CT83
+
+Methylation and expression for CT83
+
+
+```{r}
+#CT83's probes
+Gene_int = "CXorf61"
+
+probes1 = annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),]$probeID
+
+#SUbset methylation for these probes
+met_ct83_1 = subset(data_met, rownames(data_met) %in% probes1)
+
+rownames(met_ct83_1) = paste(annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),
+                                               ]$UCSC_RefGene_Group,
+                               rownames(met_ct83_1), sep="_") # Annotation CpG
+
+#CT83 Expression / ech
+Gene_int = "CT83"
+
+ENS_CT83 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+exp_ct83_1 = subset(data_exp, rownames(data_exp) %in% ENS_CT83$ENSEMBL)
+dim(exp_hormad_1)
+```
+
+We add CNV information
+
+
+```{r}
+alter_ct83 <- rbind(Alter_Sample_CTpos, Alter_Sample_CTpos)
+```
+
+Vector with expression level
+```{r}
+Subtype_ct = coldata_ens$CXorf61.203413
+
+Subtype_ct = as.character(Subtype_ct)
+Subtype_ct[which(coldata_ens$shortLetterCode == "NT")] = "NT"
+Subtype_ct = as.factor(Subtype_ct)
+```
+
+```{r}
+exp_ct83_1 = data.frame( expression = c(exp_ct83_1), Statut = Subtype_ct, Type = Subtype) 
+
+quant_ct83 = quantile(exp_ct83_1$expression, 
+         probs = seq(0, 1, 0.1))
+mini = quant_ct83[2]
+maxi = quant_ct83[10]
+
+exp_ct83_1 <- exp_ct83_1 %>% 
+                mutate(State_quantile = ifelse(exp_ct83_1[,1] <= c(mini), 
+                                               paste("Low", Gene_int, sep = "_"),
+                                        ifelse(exp_ct83_1[,1] >= c(maxi), 
+                                               paste("High", Gene_int, sep = "_"), 
+                                         "NS"
+                                               )
+                                          )
+                      )
+
+#On remplace les NT
+exp_ct83_1$State_quantile[ which(coldata_ens$shortLetterCode=="NT")] <- "NT"
+exp_ct83_1 %>% head
+```
+
+
+```{r}
+#On assemble méthylation et expression
+exp_met_ct83_1 = data.frame(exp_ct83_1, t(met_ct83_1))
+
+exp_met_ct83_1 <- data.frame(barcode = rep(coldata_ens$barcode, length(probes1)),
+                               Patient = rep(rownames(exp_met_ct83_1), length(probes1)),
+                               ENSG00000143452 = rep(exp_ct83_1[,1], length(probes1)),
+                               Statut = rep(exp_ct83_1$Statut, length(probes1)),
+                               Type = rep(exp_ct83_1$Type, length(probes1)),
+                               State_quantile = rep(exp_ct83_1$State_quantile, 
+                                                    length(probes1)),
+                               gather(data = exp_met_ct83_1[,5:c(length(probes1)+4)], 
+                                     key = "Cg", 
+                                     value = "meth") )
+
+exp_met_ct83_1 %>% head
+```
+
+add cnv info
+```{r}
+exp_met_ct83_1 <- merge(alter_ct83,exp_met_ct83_1, by.x = "Patient", by.y = "Patient", all = T ) 
+```
+
+
+```{r}
+A = "Basal"
+coul = "darkgoldenrod"
+
+g1 = ggplot(data = subset(exp_met_ct83_1, Type == A), 
+       aes(x = log2(1+ENSG00000143452), y = meth, color = CNV ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  scale_y_continuous(limits = c(0,1))+
+  facet_wrap(~Cg) +
+ # scale_color_manual(values=c("red4", "navy","grey50", "black"))+
+  labs(title = paste("Correlation CT83 exp / meth \n", A), y="beta value",x="log2(CT83 expression)",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 9),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+
+Mean methylation at promoter
+
+```{r}
+#Select probes at TSS200 / 5'UTR / 1st exon
+id <- c(grep("TSS200", exp_met_ct83_1$Cg[1:10]),
+        grep("5.UTR", exp_met_ct83_1$Cg[1:10]))
+
+index <- exp_met_ct83_1$Cg[id]
+
+exp_met_ct83_1_sub <- subset(exp_met_ct83_1, Cg %in% index)
+
+Mean_ct83 <- by(exp_met_ct83_1_sub$meth, exp_met_ct83_1_sub$barcode, mean, na.rm = TRUE)
+
+
+
+Table_mean <- data.frame(barcode = names(c(Mean_horm)),
+                             Patient = coldata_ens$primary,
+                             MoyMet = c(Mean_horm), 
+                             exp = exp_ct83_1$expression,
+                             Statut = exp_ct83_1$Statut,
+                             Type = exp_ct83_1$Type,
+                             State_quantile = exp_ct83_1$State_quantile
+                             )
+
+head(Table_mean)
+```
+
+```{r}
+Table_mean <- merge(alter_ct83,Table_mean, by.x = "Patient", by.y = "Patient", all = T ) 
+
+
+Table_mean <- data.frame(Table_mean,
+                              fact = Table_mean$CNV * (Table_mean$SegEnd - Table_mean$segmSt))
+
+write.table(Table_mean, "CT83_amp.txt", row.names = F, col.names = T, quote = F, sep = "\t")
+```
+
+
+```{r}
+A = "Basal"
+
+
+g1 = ggplot(data = subset(Table_mean, Type == A), 
+       aes(x = log2(1+exp), y = MoyMet, fill = CNV ))+
+  geom_jitter(size = 5, shape = 21, color = "black")+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+  scale_fill_gradient2(low = "navy", high = "red4",
+                        na.value = "grey",
+                        limits = c(-1, 1))  + 
+  #scale_color_manual(values=c("black", "red4","grey20"))+
+  labs(title="Correlation CT83 exp / Mean TSS200 meth \n Basal (Breast)", y="beta value",x="log2(CT83 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 9),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+```{r}
+g1 = ggplot(data = subset(Table_mean, Type == A), 
+       aes(x = log2(1+exp), y = MoyMet, fill = Values ))+
+  geom_point(size = 5, shape = 21, color = "black")+
+  geom_smooth(colour = "black",fill="white", method = "lm") +
+ # facet_wrap(~Type) +
+  scale_fill_manual(values = c("#FC4E07", "#00AFBB","white", "grey"),
+                                na.translate = TRUE, na.value = "grey") +
+  labs(title="Correlation CT83 exp / Mean TSS200 meth \n Basal (Breast)", y="beta value",x="log2(CT83 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
