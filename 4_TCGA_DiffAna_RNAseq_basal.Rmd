@@ -1,0 +1,570 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+To perform the differential analysis between HORMAD1_CT83 pos and neg basal-like breast tumors 
+
+R version 3.5.3
+
+
+# Introduction
+##Librairies
+
+```{r warning=FALSE }
+library(DESeq2)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(scales)
+
+library(clusterProfiler)
+library(msigdbr)
+```
+
+## Datas
+From TCGA_biolinks, counts tables (HTSeq). To get Summarized Exp for basal-like samples from TCGAbiolinks, code was (15/06/21, this as to be done with R v4 at least):
+
+devtools::install_github("BioinformaticsFMRP/TCGAbiolinks")
+library(TCGAbiolinks)
+isServeOK()
+
+query <- GDCquery(project = "TCGA-BRCA",
+                  data.category = "Transcriptome Profiling",
+                  data.type = "Gene Expression Quantification",
+                  workflow.type = "HTSeq - Counts")
+
+
+                  
+GDCdownload(query, method = "api", files.per.chunk = 50) #download par petits paquets
+BRCA_counts <- GDCprepare(query) #Pr?pare l'env de travail : SummarizedExperiment ? partir des data
+
+query <- GDCquery(project = "TCGA-BRCA",
+                  data.category = "Transcriptome Profiling",
+                  data.type = "Gene Expression Quantification",
+                  workflow.type = "HTSeq - FPKM-UQ")
+
+
+                  
+GDCdownload(query, method = "api", files.per.chunk = 50) #download par petits paquets
+BRCA_FPKMUQ <- GDCprepare(query) #Pr?pare l'env de travail : SummarizedExperiment ? partir des data
+
+BRCA_basal_counts <- BRCA_counts[, which(colData(BRCA_counts)$paper_BRCA_Subtype_PAM50 == "Basal" &
+                    colData(BRCA_counts)$shortLetterCode == "TP")]
+                    
+Then:
+saveRDS(BRCA_basal_counts, "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_basal_data_counts.rds")
+saveRDS(BRCA_FPKMUQ, "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_basal_data_FPKMUQv4.rds")
+
+WARNINGS: these RDS files are made to be used with R => 4 du to the inconsistency between matrix/array definitions in previous versions....
+
+```{r}
+BRCA_basal_counts <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_basal_data_counts.rds")
+
+BRCA_breast_FPKMUQ <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_data_FPKMUQv4.rds")
+```
+
+
+
+# Labels Tumors
+
+```{r}
+# Grep id for basal like tumors
+id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
+id_NT <- which(colData(BRCA_breast_FPKMUQ)$shortLetterCode == "NT")
+
+
+# Grep expression vectors for HORMAD1 and CT83
+Gene_int = "HORMAD1"
+
+ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+k <- which(rowData(BRCA_breast_FPKMUQ)$ensembl_gene_id ==  ENS_Hormad$ENSEMBL )
+
+XP_Hormad <- assay(BRCA_breast_FPKMUQ)[k,]
+XP_Hormad_nb <- assay(BRCA_breast_FPKMUQ)[k, -id_basal]
+XP_Hormad_b <- assay(BRCA_breast_FPKMUQ)[k, id_basal]
+XP_Hormad_NT <- assay(BRCA_breast_FPKMUQ)[k,id_NT]
+
+
+Gene_int = "CT83"
+
+ENS_CT83 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+k <- which(rowData(BRCA_breast_FPKMUQ)$ensembl_gene_id ==  ENS_CT83$ENSEMBL )
+
+XP_CT83 <- assay(BRCA_breast_FPKMUQ)[k,]
+XP_CT83_nb <- assay(BRCA_breast_FPKMUQ)[k,-id_basal]
+XP_CT83_b <- assay(BRCA_breast_FPKMUQ)[k,id_basal]
+XP_CT83_NT <- assay(BRCA_breast_FPKMUQ)[k,id_NT]
+
+par(mfrow=c(1,2)) 
+plot(sort(t(XP_Hormad_b)))
+plot(sort(t(XP_CT83_b)))
+```
+
+
+```{r}
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+thr_h <-  mean(t(XP_Hormad_NT))+2*sd(t(XP_Hormad_NT))
+thr_ct <-  mean(t(XP_CT83_NT))+2*sd(t(XP_CT83_NT))
+
+
+Factor_H_CT <- data.frame(factor = rep(NA, length(t(XP_Hormad))), 
+                          patient = rep(NA, length(t(XP_Hormad))))
+
+id_ON <- which(t(XP_CT83) > thr_ct & t(XP_Hormad) > thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+Factor_H_CT[id_ON, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_ON]
+
+id_CT <- which(t(XP_CT83) > thr_ct & t(XP_Hormad) <= thr_h )
+Factor_H_CT[id_CT, "factor"] <- "CTonly"
+Factor_H_CT[id_CT, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_CT]
+
+id_H <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) > thr_h )
+Factor_H_CT[id_H, "factor"] <- "Honly"
+Factor_H_CT[id_H, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_H]
+
+id_OFF <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) <= thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+Factor_H_CT[id_OFF, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_OFF]
+
+
+table(Factor_H_CT$factor)
+table(Factor_H_CT$factor[id_basal])
+
+```
+> colData(dds)$paper_BRCA_Subtype_PAM50 <- colData(BRCA_basal_counts)$paper_BRCA_Subtype_PAM50
+> colData(dds)$paper_patient <- colData(BRCA_basal_counts)$paper_patient
+> colData(dds)$shortLetterCode <- colData(BRCA_basal_counts)$shortLetterCode
+
+```{r}
+par(mfrow=c(1,2)) 
+plot(sort(t(XP_Hormad_b)))
+abline(h = thr_h)
+plot(sort(t(XP_CT83_b)))
+abline(h = thr_ct)
+
+```
+```{r}
+id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
+
+data <- data.frame(HORMAD1 = (XP_Hormad_b),
+                   CT83 = (XP_CT83_b))
+data$type <- Factor_H_CT$factor[id_basal]
+
+
+library(ggplot2)
+
+ggplot(data = data, aes(x = (HORMAD1), y = (CT83), shape = type  ))+
+  geom_jitter(size = 3, color = "black", na.rm = T) + 
+  geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+  geom_hline(yintercept = (thr_ct))+
+  geom_vline(xintercept = (thr_h)) +
+  
+  scale_shape_manual(values = c(0:2, 5))+
+  scale_x_continuous(trans = 'log10')+
+  scale_y_continuous(trans = 'log10')+
+  
+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+
+# DESeq2
+
+```{r}
+##########################
+# using DESeq2 for the differential analysis of RNA-Seq data
+##########################
+library(DESeq2)
+
+# load the design file
+sampleTable <- Factor_H_CT[id_basal,]
+sampleTable <- sampleTable[ match(colData(BRCA_basal_counts)$paper_patient, sampleTable$patient  ), ]
+sampleTable$sampleName <- colnames(BRCA_basal_counts)
+rownames(sampleTable) <- colnames(BRCA_basal_counts)
+
+cdt = assay(BRCA_basal_counts)
+
+# create a "dds" object (heart of the DESeq2 package)
+dds <- DESeqDataSetFromMatrix(countData = cdt,
+                                  colData = sampleTable, 
+                                  design = ~ factor)
+print(dds)
+
+
+# extract counts from the dds object used by DESeq2
+counts <- counts(dds)
+
+# number of reads per sample
+barplot(colSums(counts))
+
+# normalization
+dds <- estimateSizeFactors(dds)
+print(sizeFactors(dds))
+
+# effect of the normalization
+normCounts <- counts(dds, normalized=TRUE)
+par(mfrow=c(1,2))
+boxplot(log2(counts+1), main="Raw counts")
+boxplot(log2(normCounts+1), main="Normalized counts")
+```
+
+Cette partie l? est longue en temps de calcul
+```{r}
+# dispersions estimation
+dds <- estimateDispersions(dds)
+
+# Principal Component Analysis (PCA) plot
+res.vst <- vst(dds)
+plotPCA(res.vst, intgroup="factor")
+```
+
+```{r}
+# statistical modeling and testing
+dds <- nbinomWaldTest(dds)
+res.ON_vs_OFF <- results(dds,
+                      contrast=c("factor","ON","OFF"), alpha=0.05, pAdjustMethod="BH")
+
+summary(res.ON_vs_OFF, alpha=0.05)
+
+# reorder
+res.ON_vs_OFF <- res.ON_vs_OFF[order(res.ON_vs_OFF$pvalue),]
+head(res.ON_vs_OFF)
+
+
+#resSig <- subset(resOrdered, padj < 0.1)
+#resSig
+```
+
+Annotations
+```{r}
+res.ON_vs_OFF$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res.ON_vs_OFF),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res.ON_vs_OFF$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res.ON_vs_OFF),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+head(as.data.frame(res.ON_vs_OFF), 30)
+```
+```{r}
+write.table(res.ON_vs_OFF, 
+            file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/TCGA_basal_ONvsOFF.txt", sep="\t", 
+            row.names=TRUE, col.names=NA, quote=FALSE)
+```
+
+## MAplot
+```{r}
+res.ON_vs_OFF <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/TCGA_basal_ONvsOFF.txt", sep="\t", header = TRUE)
+```
+
+
+```{r}
+A = "CT83 & HORMAD1 ON  vs OFF"
+data = data.frame(res.ON_vs_OFF)
+
+int_TSPS = c("HORMAD1", "CT83")
+
+int_diff_neg = which(data$padj < 0.05
+                                    & data$log2FoldChange < 0)
+int_diff_pos = which(data$padj < 0.05 & 
+                                data$log2FoldChange > 0)
+
+
+g1 = ggplot(data,
+       aes(y = -log10(padj), x = log2FoldChange))+
+  geom_point(data = data[-c(int_diff_neg, int_diff_pos),], shape = 1, color ="black")+
+  geom_point(data = data[int_diff_neg,], shape = 1,  color = "blue4")+
+  geom_point(data = data[int_diff_pos,], shape = 1, color = "red4")+
+
+  scale_x_continuous(limits = c(-15,15)) + 
+#  scale_y_continuous(limits = c(0,15)) +                  
+  theme_classic()+                                                     
+  theme(plot.title = element_text(size = 10,hjust=0.5),    
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),       
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+g1
+```
+
+```{r}
+g2 = ggplot(data,
+       aes(x = baseMean, y = log2FoldChange, label = symbol))+
+  geom_point(data = data[-c(int_diff_neg, int_diff_pos),], shape = 1, color ="black")+
+  geom_point(data = data[int_diff_neg,], shape = 1,  color = "blue4")+
+  geom_point(data = data[int_diff_pos,], shape = 1, color = "red4")+
+
+#  scale_y_continuous(limits = c(-10,10)) +                  
+  theme_classic()+                                                     
+  theme(plot.title = element_text(size = 10,hjust=0.5),    
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),       
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+g2
+```
+
+Hallmarks
+
+```{r}
+library(plotly)
+
+ggplotly(g2)
+```
+
+##GSEA
+
+```{r}
+m_t2g <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, entrez_gene)
+
+id_signif <- which(res.ON_vs_OFF$padj < 0.05 )
+data = as.data.frame((res.ON_vs_OFF[id_signif,]))
+
+gene_list = data$log2FoldChange
+names(gene_list) = data$entrez
+gene_list = sort(gene_list, decreasing = T)
+gene_list = gene_list[-which(duplicated(names(gene_list))==TRUE)]
+
+length(gene_list)
+
+egmt2 <-GSEA(gene_list, 
+            TERM2GENE = m_t2g, 
+            pvalueCutoff = 0.25,
+            by = "fgsea")
+dotplot(egmt2, showCategory = 20, font.size = 10, split = ".sign") + facet_grid(.~.sign)
+```
+
+
+C2 curated
+
+```{r}
+m_c2 <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::select(gs_name, entrez_gene)
+head(m_c2)
+
+
+# compar
+emC2 <- GSEA(gene_list, 
+            TERM2GENE = m_c2, 
+            pvalueCutoff = 0.25)
+head(emC2)
+
+dotplot(emC2, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+data_barplot <- subset(data.frame(emC2), p.adjust < 1)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:20,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA C2 Curated", y="-log10(padj)",x=" ",cex=10)+
+    scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 3),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text( size = 6, colour="black"),
+       legend.position = "right")
+```
+```{r}
+
+
+C5_GO_gene_sets = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>% 
+  dplyr::select(gs_name, entrez_gene)
+
+# compar
+emGO <- GSEA(gene_list, 
+            TERM2GENE = C5_GO_gene_sets, 
+            pvalueCutoff = 0.25)
+
+dotplot(emGO, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+
+data_barplot <- subset(data.frame(emGO), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:20,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA GO", y="-log10(padj)",x=" ",cex=10)+
+    scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text( colour="black"),
+       legend.position = "right")
+```
+
+KEGG
+
+```{r}
+C2_KEGG_gene_sets = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:KEGG") %>%
+  dplyr::select(gs_name, entrez_gene)
+
+# compar
+emKEGG <- GSEA(gene_list, 
+            TERM2GENE = C2_KEGG_gene_sets, 
+            pvalueCutoff = 0.25)
+
+dotplot(emKEGG, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+
+
+data_barplot <- subset(data.frame(emKEGG), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:10,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA KEGG", y="-log10(padj)",x=" ",cex=10)+
+  theme_bw()+ 
+  scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text(size = 10, colour="black"),
+       legend.position = "right")
+```
+Breast curated 
+
+
+```{r}
+C2_gene_sets = msigdbr(species = "Homo sapiens", category = "C2")
+
+Breast_Curated <- C2_gene_sets[grep("BREAST",C2_gene_sets$gs_name),] %>%
+  dplyr::select(gs_name, entrez_gene)
+
+emBREAST <- GSEA(gene_list, 
+            TERM2GENE = Breast_Curated, 
+            pvalueCutoff = 0.25)
+
+dotplot(emBREAST, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+
+data_barplot <- subset(data.frame(emBREAST), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:20,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA Breast", y="-log10(padj)",x=" ",cex=10)+
+  theme_bw()+ 
+  scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text(size = 6, colour="black"),
+       legend.position = "right")
+```
+
+
+
+## AnaDiff HMLE signature
+```{r}
+signature <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210107_RNAseq_HMLE_Hormad1CT83_Blasti/GSEA/H1_CT83_DEGs_signif.rnk", header=FALSE)
+
+head(signature)
+```
+
+
+```{r}
+# Formater le gmt
+sign_t2g <-  data.frame(gs_name = rep("Signature_Hormad1_CT83_HMLE", nrow(signature)),
+                        gene_symbol = signature$V1) %>% 
+  dplyr::select(gs_name, gene_symbol)
+head(sign_t2g)
+
+# Formater les donnees
+id_int = which(res.ON_vs_OFF$padj <= 1)
+
+tab <- data.frame(res.ON_vs_OFF$symbol[id_int],
+                 res.ON_vs_OFF$log2FoldChange[id_int])
+colnames(tab) <- c("Symbol", "Fold-Change")
+
+gene_list = tab$`Fold-Change`
+names(gene_list) = tab$Symbol
+gene_list = sort(gene_list, decreasing = T)
+gene_list = gene_list[-which(duplicated(names(gene_list))==TRUE)]
+
+length(gene_list)
+
+# compar
+em2 <- GSEA(gene_list, 
+            TERM2GENE = sign_t2g, 
+            minGSSize = 1, 
+            maxGSSize = 500,
+            nPerm = 1000,
+           # pAdjustMethod = 
+            pvalueCutoff = 1,
+            by = "fgsea")
+head(em2)
+```
+
+
+```{r}
+library(Cairo)
+library(ggplot2)
+
+
+gSEAlist <- list()
+  
+win.metafile(paste("GSEA",em2$Description[1],".wmf", sep = "_"))
+
+gSEAlist <- gseaplot(em2, by = "all", title = em2$Description[1], geneSetID = 1)
+
+dev.off()
+ggsave(paste("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/", "GSEA",em2$Description[1],".wmf", sep = "_"),
+       device=cairo_ps, 
+       gSEAlist)
+
+
+gSEAlist
+```
+
+
+
+
+
+
+
+
+
+
