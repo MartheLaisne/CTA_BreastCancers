@@ -1,0 +1,175 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+# Introduction
+
+
+
+
+##Librairies
+
+```{r warning=FALSE }
+library(SummarizedExperiment)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(scales)
+
+library(clusterProfiler)
+library(msigdbr)
+```
+
+
+## Datas
+```{r}
+BRCA_breast_FPKMUQ <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_data_FPKMUQv4.rds")
+
+Factor_H_CT_all <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/Factor_H_CT_all_TCGA_Breas.txt", header = TRUE)
+
+
+#Annotation from TCGA study
+ClassifLehmannTCGA <- read.delim2("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190806_LehmannTCGA/ClassifLehmannTCGA.txt")
+head(ClassifLehmannTCGA)
+```
+# Data organization
+
+```{r}
+ClassifLehmannTCGA_order = data.frame(matrix(nrow = ncol(BRCA_breast_FPKMUQ), 
+                                             ncol = ncol(ClassifLehmannTCGA)))
+
+for (col in 1:ncol(BRCA_breast_FPKMUQ)) {
+  
+     k = which(ClassifLehmannTCGA$BARCODE == colData(BRCA_breast_FPKMUQ)$paper_patient[col])
+     ClassifLehmannTCGA_order[col, ] <- ClassifLehmannTCGA[k[1],]
+}
+
+colnames(ClassifLehmannTCGA_order) <- colnames(ClassifLehmannTCGA)
+
+head(ClassifLehmannTCGA_order)
+```
+
+```{r}
+# Grep id for basal like tumors
+id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
+id_NT <- which(colData(BRCA_breast_FPKMUQ)$shortLetterCode == "NT")
+
+
+# Grep expression vectors for HORMAD1 and CT83
+Gene_int = "HORMAD1"
+
+ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+k <- which(rowData(BRCA_breast_FPKMUQ)$ensembl_gene_id ==  ENS_Hormad$ENSEMBL )
+
+XP_Hormad <- assay(BRCA_breast_FPKMUQ)[k,]
+XP_Hormad_nb <- assay(BRCA_breast_FPKMUQ)[k, -id_basal]
+XP_Hormad_b <- assay(BRCA_breast_FPKMUQ)[k, id_basal]
+XP_Hormad_NT <- assay(BRCA_breast_FPKMUQ)[k,id_NT]
+
+
+Gene_int = "CT83"
+
+ENS_CT83 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+k <- which(rowData(BRCA_breast_FPKMUQ)$ensembl_gene_id ==  ENS_CT83$ENSEMBL )
+
+XP_CT83 <- assay(BRCA_breast_FPKMUQ)[k,]
+XP_CT83_nb <- assay(BRCA_breast_FPKMUQ)[k,-id_basal]
+XP_CT83_b <- assay(BRCA_breast_FPKMUQ)[k,id_basal]
+XP_CT83_NT <- assay(BRCA_breast_FPKMUQ)[k,id_NT]
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+thr_h <-  mean(t(XP_Hormad_NT))+2*sd(t(XP_Hormad_NT))
+thr_ct <-  mean(t(XP_CT83_NT))+2*sd(t(XP_CT83_NT))
+```
+
+
+# biplot
+```{r}
+id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
+
+data <- data.frame(HORMAD1 = (XP_Hormad_b),
+                   CT83 = (XP_CT83_b))
+data$type <- Factor_H_CT$factor[id_basal]
+
+data$lehman <- ClassifLehmannTCGA_order$TNBCtype[id_basal]
+data$lehman4 <- ClassifLehmannTCGA_order$TNBCtype_4[id_basal]
+
+
+ggplot(data = data, aes(x = (HORMAD1), y = (CT83), shape = type, color = lehman  ))+
+  geom_jitter(size = 3,  na.rm = T) + 
+  geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+  geom_hline(yintercept = (thr_ct))+
+  geom_vline(xintercept = (thr_h)) +
+  
+  scale_shape_manual(values = c(0:2, 5))+
+  scale_x_continuous(trans = 'log10')+
+  scale_y_continuous(trans = 'log10')+
+  
+  scale_color_manual(values=c("orange","red3","black", "grey70", 
+                             "navy", "cyan", "green4", "pink", "white"))+
+  
+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+
+```
+
+
+```{r}
+
+ggplot(data = data, aes(x = (HORMAD1), y = (CT83), shape = type, color = lehman4  ))+
+  geom_jitter(size = 3,  na.rm = T) + 
+  geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+  geom_hline(yintercept = (thr_ct))+
+  geom_vline(xintercept = (thr_h)) +
+  
+  scale_shape_manual(values = c(0:2, 5))+
+  scale_x_continuous(trans = 'log10')+
+  scale_y_continuous(trans = 'log10')+
+  
+  scale_color_manual(values=c("orange","red3","black", "grey70", 
+                              "cyan", "green4",  "white"))+
+  
+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
