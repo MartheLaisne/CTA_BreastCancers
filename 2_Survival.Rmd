@@ -1,0 +1,795 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Intro
+```{r}
+HORMAD1_Basal_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/HORMAD1_TNBC_KMplot.txt")
+HORMAD1_All_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/HORMAD1_All_KMplot.txt")
+
+
+CT83_Basal_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/CT83_TNBC_KMplot.txt")
+CT83_All_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/CT83_All_KMplot.txt")
+
+head(CT83_Basal_KMplot)
+```
+
+
+
+```{r}
+library(dplyr)
+library(SummarizedExperiment)
+library(ggplot2)
+library(survival)
+library(survminer)
+
+```
+
+
+
+# Survie HCT
+RFS
+```{r}
+years_to_death <- HORMAD1_Basal_KMplot$Time..months.
+
+Mort <- HORMAD1_Basal_KMplot$Event
+
+head(data.frame(years_to_death, Mort))
+```
+
+
+
+```{r}
+plot(sort(HORMAD1_Basal_KMplot$Expression))
+
+plot(sort(CT83_Basal_KMplot$Expression))
+plot(log2(1+CT83_All_KMplot$Expression)~log2(1+HORMAD1_All_KMplot$Expression))
+
+```
+
+
+
+```{r}
+bw_fix <- 0.7
+
+#Thr HORMAD1
+d <- density(x=log2(1+HORMAD1_All_KMplot$Expression),
+             kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_h <- 2^(d$x[variations_h][2]-1)
+
+#Thr CT83
+d <- density(x=log2(1 + CT83_All_KMplot$Expression), 
+             kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_ct <- 2^(d$x[variations_ct][2]-1)
+
+```
+```{r}
+XP_CT83 <- CT83_Basal_KMplot$Expression
+
+XP_Hormad <- HORMAD1_Basal_KMplot$Expression
+
+
+thr_h <- 716
+thr_ct <- median(XP_CT83)
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+
+Factor_H_CT <- data.frame(factor = rep(NA, nrow(HORMAD1_Basal_KMplot)),
+                          H = rep("OFF", nrow(HORMAD1_Basal_KMplot)),
+                          CT = rep("OFF", nrow(HORMAD1_Basal_KMplot)))
+
+# Only H
+id_ON <- which(t(XP_Hormad) > thr_h )
+Factor_H_CT[id_ON, "H"] <- "ON"
+
+
+# Only CT
+id_ON <- which(t(XP_CT83) >= thr_ct )
+Factor_H_CT[id_ON, "CT"] <- "ON"
+
+id_ON <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) >= thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+
+id_CT <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_CT, "factor"] <- "CTonly"
+
+id_H <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) > thr_h )
+Factor_H_CT[id_H, "factor"] <- "Honly"
+
+id_OFF <- which(t(XP_CT83) < thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+
+
+table(Factor_H_CT$factor)
+```
+
+
+
+```{r}
+
+
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor_H_CT$factor)
+
+#mydata <- subset(mydata, Group %in% c("ON", "OFF"))
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "Basal",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+#    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+```
+# H CT PR
+
+
+```{r}
+HORMAD1_PR_KMplot <- read.delim("~/Desktop/kmplot RFS filter med CT83 best thr HORMAD1/ERplus Her2moins HORMAD1.txt")
+HORMAD1_All_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/HORMAD1_All_KMplot.txt")
+
+
+CT83_PR_KMplot <- read.delim("~/Desktop/kmplot RFS filter med CT83 best thr HORMAD1/ERplus Her2moins CT83.txt")
+CT83_All_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/CT83_All_KMplot.txt")
+
+head(CT83_PR_KMplot)
+```
+
+
+
+```{r}
+library(dplyr)
+library(SummarizedExperiment)
+library(ggplot2)
+library(survival)
+library(survminer)
+
+```
+
+
+RFS
+```{r}
+years_to_death <- HORMAD1_PR_KMplot$Time..months.
+
+Mort <- HORMAD1_PR_KMplot$Event
+
+head(data.frame(years_to_death, Mort))
+```
+
+
+
+```{r}
+plot(sort(HORMAD1_PR_KMplot$Expression))
+
+plot(sort(CT83_PR_KMplot$Expression))
+plot(log2(1+CT83_All_KMplot$Expression)~log2(1+HORMAD1_All_KMplot$Expression))
+
+```
+
+
+
+```{r}
+bw_fix <- 0.7
+
+#Thr HORMAD1
+d <- density(x=log2(1+HORMAD1_All_KMplot$Expression),
+             kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_h <- 2^(d$x[variations_h][2]-1)
+
+#Thr CT83
+d <- density(x=log2(1 + CT83_All_KMplot$Expression), 
+             kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_ct <- 2^(d$x[variations_ct][2]-1)
+
+```
+
+## Thr
+```{r}
+XP_CT83 <- CT83_PR_KMplot$Expression
+
+XP_Hormad <- HORMAD1_PR_KMplot$Expression
+
+
+thr_h <-  thr_h
+thr_ct <- thr_ct
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+
+Factor_H_CT <- data.frame(factor = rep(NA, nrow(HORMAD1_PR_KMplot)),
+                          H = rep("OFF", nrow(HORMAD1_PR_KMplot)),
+                          CT = rep("OFF", nrow(HORMAD1_PR_KMplot)))
+
+# Only H
+id_ON <- which(t(XP_Hormad) > thr_h )
+Factor_H_CT[id_ON, "H"] <- "ON"
+
+
+# Only CT
+id_ON <- which(t(XP_CT83) >= thr_ct )
+Factor_H_CT[id_ON, "CT"] <- "ON"
+
+id_ON <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) >= thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+
+id_CT <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_CT, "factor"] <- "CT_ON"
+
+id_H <- which(t(XP_CT83) < thr_ct & t(XP_Hormad) >= thr_h )
+Factor_H_CT[id_H, "factor"] <- "H_ON"
+
+id_OFF <- which(t(XP_CT83) < thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+
+
+table(Factor_H_CT$factor)
+```
+```{r}
+Factor_H_CT <- data.frame(factor = rep(NA, nrow(HORMAD1_PR_KMplot)),
+                          H = rep("OFF", nrow(HORMAD1_PR_KMplot)),
+                          CT = rep("OFF", nrow(HORMAD1_PR_KMplot)))
+
+
+id_ON <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) >= thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+
+id_CT <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_CT, "factor"] <- "ON"
+
+id_H <- which(t(XP_CT83) < thr_ct & t(XP_Hormad) >= thr_h )
+Factor_H_CT[id_H, "factor"] <- "ON"
+
+id_OFF <- which(t(XP_CT83) < thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+
+
+table(Factor_H_CT$factor)
+```
+
+
+
+```{r}
+
+
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor_H_CT$factor)
+
+#mydata <- subset(mydata, Group %in% c("ON", "OFF"))
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+gg <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "Basal",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+#    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+
+gg
+```
+# Survie LRGUK
+
+```{r}
+LRGUK_LumA_RFS_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/LRGUK_LumA_ER+HER-_RFS_KMplot.txt")
+
+
+years_to_death <- LRGUK_LumA_RFS_KMplot$Time..months.
+
+Mort <- LRGUK_LumA_RFS_KMplot$Event
+
+
+# D'apres Kmplotter
+thr <- 111
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+XP_CT <- LRGUK_LumA_RFS_KMplot$Expression
+
+Factor <-  rep("OFF", nrow(LRGUK_LumA_RFS_KMplot))
+
+# Only H
+id_ON <- which(t(XP_CT) > thr )
+Factor[id_ON] <- "ON"
+
+```
+
+```{r}
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor)
+
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "LumA",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+#   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+```
+
+```{r}
+LRGUK_LumA_RFS_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/LRGUK_LumB_ER+HER-_RFS_KMplot.txt")
+
+
+years_to_death <- LRGUK_LumA_RFS_KMplot$Time..months.
+
+Mort <- LRGUK_LumA_RFS_KMplot$Event
+
+
+# D'apres Kmplotter
+thr <- 47
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+XP_CT <- LRGUK_LumA_RFS_KMplot$Expression
+
+Factor <-  rep("OFF", nrow(LRGUK_LumA_RFS_KMplot))
+
+# Only H
+id_ON <- which(t(XP_CT) > thr )
+Factor[id_ON] <- "ON"
+
+
+
+
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor)
+
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "LumA",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+#   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+```
+
+# Tex14
+
+```{r}
+LRGUK_LumA_RFS_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/TEX14_LumB_ER+HER-_RFS_KMplot.txt")
+
+
+years_to_death <- LRGUK_LumA_RFS_KMplot$Time..months.
+
+Mort <- LRGUK_LumA_RFS_KMplot$Event
+
+
+# D'apres Kmplotter
+thr <- 52
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+XP_CT <- LRGUK_LumA_RFS_KMplot$Expression
+
+Factor <-  rep("OFF", nrow(LRGUK_LumA_RFS_KMplot))
+
+# Only H
+id_ON <- which(t(XP_CT) >= thr )
+Factor[id_ON] <- "ON"
+
+
+
+
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor)
+
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "LumA",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+#   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+```
+
+
+# Her
+```{r}
+RFS_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/DMRTC2_Her_HER+ER-_33_RFS_KMplot.txt")
+
+
+years_to_death <- RFS_KMplot$Time..months.
+
+Mort <- RFS_KMplot$Event
+
+
+# D'apres Kmplotter
+thr <- 33
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+XP_CT <- RFS_KMplot$Expression
+
+Factor <-  rep("OFF", nrow(RFS_KMplot))
+
+# Only H
+id_ON <- c(which(t(XP_CT) > thr ),
+           which(t(XP_CT) == thr )[3])
+Factor[id_ON] <- "ON"
+
+
+
+
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor)
+
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+#   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+```
+```{r}
+RFS_KMplot <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/TDRD1_Her_HER+ER-_33_RFS_KMplot.txt")
+
+
+years_to_death <- RFS_KMplot$Time..months.
+
+Mort <- RFS_KMplot$Event
+
+
+# D'apres Kmplotter
+thr <- 33
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+XP_CT <- RFS_KMplot$Expression
+
+Factor <-  rep("OFF", nrow(RFS_KMplot))
+
+# Only H
+id_ON <- c(which(t(XP_CT) > thr ),
+           which(t(XP_CT) == thr )[1])
+Factor[id_ON] <- "ON"
+
+
+
+
+mydata=data.frame(time=years_to_death,
+                  status=Mort,
+                  Group = Factor)
+
+
+fit_recid=survfit(Surv(time,status)~Group,
+                  data=mydata)
+
+ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+#   palette = c("darkcyan", "goldenrod3",  "black", "hotpink4"),
+    palette = c("black", "red"),
+
+   font.x = c(10),
+   font.y = c(10),
+   main="RFS",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Responder Anthracyclin
+
+```{r}
+TNBC_HORMAD1_CT83_Anthracyclin_PCR <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210730_Survival/TNBC_HORMAD1_CT83_Anthracyclin_PCR.txt")
+
+head(TNBC_HORMAD1_CT83_Anthracyclin_PCR)
+```
+
+```{r}
+bw_fix <- 0.7
+
+#Thr HORMAD1
+d <- density(x=log2(1+TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1),
+             kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_h <- 2^(d$x[variations_h][2]-1)
+
+#Thr CT83
+d <- density(x=log2(1 + TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83), 
+             kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_ct <- 2^(d$x[variations_ct][2]-1)
+```
+
+
+
+
+```{r}
+XP_CT83 <- TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83
+
+XP_Hormad <- TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1
+
+
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+
+Factor_H_CT <- data.frame(factor = rep(NA, nrow(TNBC_HORMAD1_CT83_Anthracyclin_PCR)),
+                          H = rep("OFF", nrow(TNBC_HORMAD1_CT83_Anthracyclin_PCR)),
+                          CT = rep("OFF", nrow(TNBC_HORMAD1_CT83_Anthracyclin_PCR)))
+
+# Only H
+id_ON <- which(t(XP_Hormad) > thr_h )
+Factor_H_CT[id_ON, "H"] <- "ON"
+
+
+# Only CT
+id_ON <- which(t(XP_CT83) >= thr_ct )
+Factor_H_CT[id_ON, "CT"] <- "ON"
+
+id_ON <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) >= thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+
+id_CT <- which(t(XP_CT83) >= thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_CT, "factor"] <- "CTonly"
+
+id_H <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) > thr_h )
+Factor_H_CT[id_H, "factor"] <- "Honly"
+
+id_OFF <- which(t(XP_CT83) < thr_ct & t(XP_Hormad) < thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+
+
+table(Factor_H_CT$factor)
+```
+
+
+
+```{r}
+by(Factor_H_CT$factor, TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder, table)
+```
+
+```{r}
+boxplot(TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1~TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder)
+
+t.test(TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1~TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder)
+
+```
+
+```{r}
+boxplot(TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83~TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder)
+
+ t.test(TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83~TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder)
+
+```
+
+```{r}
+boxplot((TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1+TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83)~TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder)
+
+t.test((TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1+TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83)~TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder)
+
+```
+
+```{r}
+library(ROCR)
+
+H_CT <- (TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1+TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83)
+
+H <- (TNBC_HORMAD1_CT83_Anthracyclin_PCR$HORMAD1)
+CT <- (TNBC_HORMAD1_CT83_Anthracyclin_PCR$CT83)
+
+
+Resp <- TNBC_HORMAD1_CT83_Anthracyclin_PCR$Responder
+
+pred <- prediction(H_CT,Resp)
+
+roc.perf = performance(pred, measure = "tpr", x.measure = "fpr")
+plot(roc.perf)
+abline(a=0, b= 1)
+```
+
+```{r}
+library(pROC)
+
+
+pROC_obj <- roc(Resp, CT,
+            smoothed = TRUE,
+            # arguments for ci
+            ci=TRUE, ci.alpha=0.9, stratified=FALSE,
+            # arguments for plot
+            plot=TRUE, auc.polygon=TRUE, max.auc.polygon=TRUE, grid=TRUE,
+            print.auc=TRUE, show.thres=TRUE)
+
+
+sens.ci <- ci.se(pROC_obj)
+plot(sens.ci, type="shape", col="lightblue")
+
+## Warning in plot.ci.se(sens.ci, type = "shape", col = "lightblue"): Low
+## definition shape.
+
+plot(sens.ci, type="bars")
+```
+
+```{r}
+library(ROCit)
+
+## Warning: package 'ROCit' was built under R version 3.5.2
+
+ROCit_objHCT <- rocit(score=H_CT,class=Resp)
+ROCit_objH <- rocit(score=H,class=Resp)
+ROCit_objCT <- rocit(score=CT,class=Resp)
+
+plot(ROCit_objHCT, "red")
+plot(ROCit_objH, "green")
+plot(ROCit_objCT, "blue")
+
+```
+
+```{r}
+set.seed(123)
+library(randomForest)
+
+data <- data.frame(Resp = as.factor(Resp), H = H, CT=CT, H_CT = as.factor(Factor_H_CT$factor))
+#data <- data.frame(Resp = as.factor(Resp), H = CT)
+
+fit <- randomForest(Resp ~ ., data = data, na.action = na.roughfix)
+
+print(fit)
+
+rf.roc<-roc(data$Resp,fit$votes[,2])
+plot(rf.roc)
+auc(rf.roc)
+
+```
+
+```{r}
+data <- data.frame(Resp = as.factor(Resp), H_CT = as.factor(Factor_H_CT$factor))
+
+
+
+ggplot(data = data, aes(x = H, y = CT, shape = Resp))+
+   geom_point(size = 5)+
+   scale_shape_manual(values = c(20,21))
+```
+
+
+
