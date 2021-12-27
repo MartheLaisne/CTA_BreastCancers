@@ -1,0 +1,268 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+R 3.5
+
+# Introduction
+##Librairies
+
+```{r warning=FALSE }
+library(DESeq2)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(scales)
+
+library(clusterProfiler)
+library(msigdbr)
+```
+
+## Datas
+
+```{r}
+
+#data_brca <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_data_FPKMUQv4.rds")
+
+
+data_brca <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/data_brca.rds")
+```
+
+
+
+# Labels Tumors
+
+
+```{r}
+# Grep id for non-tumors
+id_NT <- which(colData(data_brca)$shortLetterCode == "NT")
+id_basal <- which(colData(data_brca)$subtype_BRCA_Subtype_PAM50 == "Basal")
+id_lum <- which(colData(data_brca)$subtype_BRCA_Subtype_PAM50 %in% c("LumA", "LumB"))
+
+# Grep expression vectors for HORMAD1 and CT83
+Gene_int = "HORMAD1"
+ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+k <- which(rowData(data_brca)$ensembl_gene_id ==  ENS_Hormad$ENSEMBL )
+XP_Hormad <- assay(data_brca, 1)[k,]
+
+
+Gene_int = "CT83"
+ENS_CT83 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+k <- which(rowData(data_brca)$ensembl_gene_id ==  ENS_CT83$ENSEMBL )
+XP_CT83 <- assay(data_brca, 1)[k,]
+
+# DMRTC2 & TDRD1
+Gene_int = "DMRTC2"
+ENS_DMRTC2 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+k <- which(rowData(data_brca)$ensembl_gene_id ==  ENS_DMRTC2$ENSEMBL )
+XP_DMRTC2 <- assay(data_brca, 1)[k,]
+
+
+Gene_int = "TDRD1"
+ENS_TDRD1 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+k <- which(rowData(data_brca)$ensembl_gene_id ==  ENS_TDRD1$ENSEMBL )
+XP_TDRD1 <- assay(data_brca, 1)[k,]
+
+# TEX14 & LRGUK
+Gene_int = "TEX14"
+ENS_TEX14 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+k <- which(rowData(data_brca)$ensembl_gene_id ==  ENS_TEX14$ENSEMBL )
+XP_TEX14 <- assay(data_brca, 1)[k,]
+
+
+Gene_int = "LRGUK"
+ENS_LRGUK <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+k <- which(rowData(data_brca)$ensembl_gene_id ==  ENS_LRGUK$ENSEMBL )
+XP_LRGUK <- assay(data_brca,1)[k,]
+
+
+```
+## THR
+
+```{r}
+bw_fix <- 0.7
+
+#Thr HORMAD1
+d <- density(x=log2(1+XP_Hormad[-id_NT]), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_h <- 2^(d$x[variations_h][2]-1)
+
+#Thr CT83
+d <- density(x=log2(1+XP_CT83[-id_NT]), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_ct <- 2^(d$x[variations_ct][2]-1)
+
+
+```
+```{r}
+
+#Thr DMRTC2
+d <- density(x=log2(1+XP_DMRTC2[-id_NT]), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_dmrtc2 <- 2^(d$x[variations_h][2]-1)
+
+#Thr TDRD1
+d <- density(x=log2(1+XP_TDRD1[-id_NT]), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_tdrd1 <- 2^(d$x[variations_ct][2]-1)
+```
+```{r}
+
+#Thr LRGUK
+d <- density(x=log2(1+XP_LRGUK[-id_NT]), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_lrguk <- 2^(d$x[variations_h][2]-1)
+
+#Thr TEX14
+d <- density(x=log2(1+XP_TEX14[-id_NT]), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_tex14 <- 2^(d$x[variations_ct][2]-1)
+```
+```{r}
+Factor_6_CT <- data.frame(HORMAD1 = rep("OFF", length(t(XP_Hormad))), 
+                          CT83 = rep("OFF", length(t(XP_Hormad))),
+                          DMRTC2 = rep("OFF", length(t(XP_Hormad))),
+                          TDRD1 = rep("OFF", length(t(XP_Hormad))),
+                          LRGUK = rep("OFF", length(t(XP_Hormad))),
+                          TEX14 = rep("OFF", length(t(XP_Hormad))),
+                          patient =  colData(data_brca)$barcode)
+
+
+id_ON <- which(t(XP_Hormad) > thr_h)
+Factor_6_CT$HORMAD1[id_ON] <- "ON"
+
+id_ON <- which(t(XP_CT83) > thr_ct)
+Factor_6_CT$CT83[id_ON] <- "ON"
+
+id_ON <- which(t(XP_DMRTC2) > thr_dmrtc2)
+Factor_6_CT$DMRTC2[id_ON] <- "ON"
+
+id_ON <- which(t(XP_TDRD1) > thr_tdrd1)
+Factor_6_CT$TDRD1[id_ON] <- "ON"
+
+id_ON <- which(t(XP_LRGUK) > thr_lrguk)
+Factor_6_CT$LRGUK[id_ON] <- "ON"
+
+id_ON <- which(t(XP_TEX14) > thr_tex14)
+Factor_6_CT$TEX14[id_ON] <- "ON"
+
+for (i in 1:6) {
+  Factor_6_CT[, i] <- as.factor(Factor_6_CT[, i])
+}
+
+
+summary(Factor_6_CT)
+```
+
+
+```{r}
+write.table(Factor_6_CT, "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/Factor_6_CT_patient_breast_all.txt",col.names = T, row.names = F, quote = F, sep = "\t")
+```
+
+
+
+
+
+
+
+
+## HORMAD1 & CT83
+
+```{r}
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+
+Factor_H_CT <- data.frame(factor = rep(NA, length(t(XP_Hormad))), 
+                          patient = rep(NA, length(t(XP_Hormad))))
+
+id_ON <- which(t(XP_CT83) > thr_ct & t(XP_Hormad) > thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+Factor_H_CT[id_ON, "patient"] <- colData(data_brca)$barcode[id_ON]
+
+id_CT <- which(t(XP_CT83) > thr_ct & t(XP_Hormad) <= thr_h )
+Factor_H_CT[id_CT, "factor"] <- "CTonly"
+Factor_H_CT[id_CT, "patient"] <- colData(data_brca)$barcode[id_CT]
+
+id_H <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) > thr_h )
+Factor_H_CT[id_H, "factor"] <- "Honly"
+Factor_H_CT[id_H, "patient"] <- colData(data_brca)$barcode[id_H]
+
+id_OFF <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) <= thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+Factor_H_CT[id_OFF, "patient"] <- colData(data_brca)$barcode[id_OFF]
+
+
+table(Factor_H_CT$factor)
+table(Factor_H_CT$factor[id_basal])
+
+```
+```{r}
+write.table(Factor_H_CT, "C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/patient_breast_all.txt",col.names = T, row.names = F, quote = F, sep = "\t")
+
+```
+
