@@ -1,0 +1,962 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Intro
+
+## Data
+```{r}
+Factor_H_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/patient_breast_all.txt", header = T, sep = "\t")
+
+Factor_6_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/Factor_6_CT_patient_breast_all.txt", header = T, sep = "\t")
+
+coldata_brca_complete <- readRDS("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190510_Breast_CaracterisationHormadCT83_RF/coldata_brca_complete.rds")
+
+data_brca <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/data_brca.rds")
+
+data_basales <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/Breast_basal_DESEq2.rds")
+
+
+head(Factor_H_CT)
+
+```
+
+
+## Lib
+```{r}
+library(SummarizedExperiment)
+library(psych)
+library(ggplot2)
+library(gridExtra)
+library(ComplexHeatmap)
+library(circlize)
+library(ggrepel)
+library(MCPcounter)
+library(dplyr)
+```
+
+
+```{r}
+Ma_fonction_MEAN3SD=function(X) {
+  mean(X, na.rm=T)+3*sd(X, na.rm=T)
+}
+Ma_fonction_mean=function(X) {
+  mean(X, na.rm=T)
+}
+Ma_fonction_SD=function(X) {
+  sd(X, na.rm=T)
+}
+vecto = function(data) {
+                 vec = NULL ; ech = NULL ; gene = NULL ; expr = NULL
+                 for (i in 1:ncol(data)) {
+                           vec = c(vec, data[,i])
+                           ech = c(ech, rep( colnames(data)[i],
+length(data[,i])) )
+                           gene = rep(row.names(data), ncol(data))
+                 }
+                 dt = data.frame(vec, ech, gene)
+                 dt$ech = factor(dt$ech, levels = colnames(data))
+                 dt$gene = factor(dt$gene, levels = rownames(data))
+         return( dt )
+}
+equation = function(x) {
+  lm_coef <- list(r = round(x$r[1,2], digits = 2),
+                  P = x$P[1,2]);
+  lm_eq <- substitute(bold(Pearson)*":"~~italic(R) == r*","~~italic(pvalue)~"="~P,lm_coef)
+  as.character(as.expression(lm_eq));                 
+}
+```
+
+
+
+# MCP
+
+
+
+```{r}
+data_fpkm <- assay(data_brca, 2) * 10^6
+
+#rownames(data_fpkm) = make.names(rowData(data_brca)$external_gene_name , unique = TRUE)
+rownames(data_fpkm) = make.names(rowData(data_brca)$gene_id  , unique = TRUE)
+
+
+MCP_breast <- MCPcounter.estimate(data_fpkm,
+                    featuresType=c("HUGO_symbols"),
+                  probesets=read.table(curl("http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/probesets.txt"),sep="\t",stringsAsFactors=FALSE,colClasses="character"),
+        genes=read.table(curl("http://raw.githubusercontent.com/ebecht/MCPcounter/master/Signatures/genes.txt"),sep="\t",stringsAsFactors=FALSE,header=TRUE,colClasses="character",check.names=FALSE)
+)
+head(MCP_breast[,1:3],10)
+```
+
+Normalization / normal tissues
+
+```{r}
+id_NT <- which(colData(data_brca)$shortLetterCode == "NT")
+
+FC_MCP_breast <- MCP_breast/apply(MCP_breast[, id_NT], 1, median)
+
+head(FC_MCP_breast[,1:3],10)
+```
+
+annotations tumeurs
+```{r}
+info <- merge.data.frame(as.data.frame(colData(data_brca)), Factor_6_CT,
+                         "patient", "patient",all.x = T )
+
+info <- merge.data.frame(info, Factor_H_CT,
+                         "patient", "patient",all.x = T )
+head(info)
+```
+
+```{r}
+FC_MCP_breast <- FC_MCP_breast %>% t %>% as.data.frame
+
+FC_MCP_breast$barcode <- rownames(FC_MCP_breast)
+
+
+info <- merge.data.frame(info, FC_MCP_breast,
+                         "barcode", "barcode",all.x = T )
+head(info)
+```
+
+
+## A. Boxplot et Tests
+
+### DMRTC2
+```{r}
+# Subset subtype
+
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+
+
+
+liste = list()
+
+for (i in rownames(MCP_breast)) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+   res <- t.test(Infiltrat ~ Class, data = data_test) 
+
+    if( res$p.value < 0.05) { # if signif : 
+    liste = c(liste, list(res))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+
+
+```{r}
+
+
+data_plot = data.frame(Infiltrat = stack(info[id_select, rownames(MCP_breast)]),
+                       Class = rep(info[id_select, id_CT], nrow(MCP_breast)))
+  
+g = ggplot(data = data_plot, aes(x = Class, y = log2( Infiltrat.values), fill = Class))+
+  geom_boxplot(notch = TRUE)+
+    
+  scale_fill_manual(values = c( "green3", "green4"))+
+  scale_x_discrete(limits = c( "OFF","ON"))+
+    
+  facet_grid(.~ Infiltrat.ind)  +
+    
+  labs(title = i, y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g
+
+```
+
+### TDRD1
+
+```{r}
+# Subset subtype
+
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "TDRD1"
+id_CT <- which(colnames(info) == CT_select)
+
+
+
+liste = list()
+
+for (i in rownames(MCP_breast)) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+   res <- t.test(Infiltrat ~ Class, data = data_test) 
+
+    if( res$p.value < 0.05) { # if signif : 
+    liste = c(liste, list(res))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+
+
+```{r}
+
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select | 
+                     info$shortLetterCode == "NT")
+
+data_plot = data.frame(Infiltrat = stack(info[id_select, rownames(MCP_breast)]),
+                       Class = rep(info[id_select, id_CT], nrow(MCP_breast)))
+  
+data_plot$Class <- as.character(data_plot$Class)
+data_plot$Class[which(rep(info$shortLetterCode[id_select], nrow(MCP_breast)) == "NT")] <- "NT"
+
+g = ggplot(data = data_plot, aes(x = Class, y = log2( Infiltrat.values), fill = Class))+
+  geom_boxplot(notch = TRUE)+
+    
+  scale_fill_manual(values = c("grey90", "green3", "green4"))+
+  scale_x_discrete(limits = c("NT", "OFF","ON"))+
+    
+  facet_grid(.~ Infiltrat.ind)  +
+    
+  labs(title = i, y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g
+
+```
+
+
+### HORMAD1 & CT83
+
+```{r}
+# Subset subtype
+
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "factor"
+id_CT <- which(colnames(info) == CT_select)
+
+
+
+liste = list()
+
+for (i in rownames(MCP_breast)) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+  fit = aov(Infiltrat ~ Class, data = data_test) 
+
+    if( summary(fit)[[1]][["Pr(>F)"]][1] < 0.05) { # if signif : 
+    Tuck_test = TukeyHSD(fit)                       # Tuckey post-hoc
+    liste = c(liste, list(Tuck_test))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+
+
+```{r}
+
+data_plot = data.frame(Infiltrat = stack(info[id_select, rownames(MCP_breast)]),
+                       Class = rep(info[id_select, id_CT], nrow(MCP_breast)))
+  
+data_plot$Class <- as.character(data_plot$Class)
+data_plot$Class[which(rep(info$shortLetterCode[id_select], nrow(MCP_breast)) == "NT")] <- "NT"
+
+g = ggplot(data = data_plot, aes(x = Class, y = log2( Infiltrat.values), fill = Class))+
+  geom_boxplot(notch = TRUE)+
+    
+  scale_fill_manual(values = c( "hotpink3", "hotpink4"))+
+  scale_x_discrete(limits = c("OFF","ON"))+
+    
+  facet_grid(.~ Infiltrat.ind)  +
+    
+  labs(title = i, y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g
+
+```
+
+
+
+# II. Bidea
+```{r}
+imm2015=read.table(file="C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/documents/171001_Doc_Signatures_immuno/Galon2015.txt", header=TRUE, sep="\t")
+
+gene_sub = unique(rownames(data_fpkm)[which(is.element(rownames(data_fpkm),
+                                                              imm2015$Name)==T)])
+ind_counts = NULL
+
+ind_counts <- which(rownames(data_fpkm) %in% gene_sub)
+
+subimm15 <- data_fpkm[ind_counts,] # subset des lignes signatures
+
+
+celltype15_2=unique(imm2015[which(is.element(imm2015$Name, rownames(subimm15) )==TRUE),])
+celltype15_2=celltype15_2[-which(duplicated(celltype15_2$Name)==TRUE),]
+subimm15t=subimm15[order(match(rownames(subimm15), celltype15_2$Name)),]
+
+#FC
+Moy_Bindea_NT_BRCA=apply(subimm15t, 1,function(x) {mean(as.matrix(x), na.rm=T)} )
+```
+
+```{r}
+#
+NormBindea_BRCA=as.matrix(subimm15t[,])/Moy_Bindea_NT_BRCA
+colnames(NormBindea_BRCA)=colnames(subimm15t[,])
+
+plot(density(NormBindea_BRCA[2,]))
+```
+
+
+
+
+
+```{r}
+Immunoscore_BRCA <- data.frame(matrix(NA, nrow=30, ncol=c(1+dim(subimm15t[,])[2])))
+    #calculer la somme des expressions normalis?es pour obtenir le nombre relatif de cellules immunitaires Ic. By fonctionne par vecteur, on l'it?re sur chaque colonne
+Bindea_MLH_NT_avecCellType_BRCA <- data.frame(celltype15_2, NormBindea_BRCA)
+#FC / NT
+for (i in seq(2,c(1+dim(subimm15t[,])[2]))) {      #pour chaque colonne-sample
+  Immunoscore_BRCA[,i]=c(by(log10(1+Bindea_MLH_NT_avecCellType_BRCA[,c(1+i)]),
+                       Bindea_MLH_NT_avecCellType_BRCA$Cell.Type,
+                       sum))
+}
+colnames(Immunoscore_BRCA)=colnames(Bindea_MLH_NT_avecCellType_BRCA)[2:dim(Bindea_MLH_NT_avecCellType_BRCA)[2]]
+Immunoscore_BRCA=Immunoscore_BRCA[,-1]#on retire la colonne 1 qui contient les cells types 
+Immunoscore_BRCA=as.matrix(Immunoscore_BRCA)
+rownames(Immunoscore_BRCA)=levels(as.factor(Bindea_MLH_NT_avecCellType_BRCA$Cell.Type))
+
+#Calculer le FC / NT : 
+FC_Immunoscore_BRCA=Immunoscore_BRCA/apply(Immunoscore_BRCA[, id_NT], 1, median)
+
+#total infiltrat
+Infiltrat_tot <- apply(FC_Immunoscore_BRCA, 2, sum)/30
+Infiltrat_tot <- data.frame(Infiltrat_tot = Infiltrat_tot)
+Infiltrat_tot$barcode <- gsub("\\.", "-", 
+                              x = names(apply(FC_Immunoscore_BRCA, 2, sum)/30))
+
+
+
+
+
+info <- merge.data.frame(info, Infiltrat_tot,
+                         "barcode", "barcode",all.x = T )
+head(info)
+
+
+```
+
+```{r}
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+
+data_plot = data.frame(Infiltrat = info$Infiltrat_tot.y[id_select],
+                      
+                       Class = info$factor[id_select])
+
+
+
+ggplot(data = data_plot, aes(x = Class, y = log2(Infiltrat), fill = Class))+
+  geom_boxplot(notch = TRUE)+
+ # scale_fill_manual(values = c("black", "cyan4", "hotpink4", "pink1", "white"))+
+  scale_x_discrete(limits = c("OFF", "Honly","CTonly", "ON"))+
+  geom_hline(yintercept=0,size=2, color="black")+
+  labs(title="Inf tot", y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+  
+```
+```{r}
+summary(aov(Infiltrat~Class, data_plot))
+
+TukeyHSD(aov(Infiltrat~Class, data_plot))
+```
+### HORMAD1 & CT83
+
+```{r}
+info <- merge.data.frame(as.data.frame(colData(data_brca)), Factor_6_CT,
+                         "patient", "patient",all.x = T )
+
+info <- merge.data.frame(info, Factor_H_CT,
+                         "patient", "patient",all.x = T )
+head(info)
+
+rownames(FC_Immunoscore_BRCA) <- rownames(Immunoscore_BRCA)
+
+#add fc
+FC_Immunoscore_BRCA_t <- FC_Immunoscore_BRCA %>% t %>% as.data.frame()
+FC_Immunoscore_BRCA_t$barcode <- gsub("\\.", "-", 
+                              x = colnames(FC_Immunoscore_BRCA))
+
+
+
+
+
+info <- merge.data.frame(info, FC_Immunoscore_BRCA_t,
+                         "barcode", "barcode",all.x = T )
+head(info)
+```
+
+
+```{r}
+# Subset subtype
+
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "factor"
+id_CT <- which(colnames(info) == CT_select)
+
+
+
+liste = list()
+
+for (i in rownames(Immunoscore_BRCA)) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT])
+  
+  fit = aov(Infiltrat ~ Class, data = data_test) 
+
+    if( summary(fit)[[1]][["Pr(>F)"]][1] < 0.05) { # if signif : 
+    Tuck_test = TukeyHSD(fit)                       # Tuckey post-hoc
+    liste = c(liste, list(Tuck_test))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+
+
+```{r}
+
+data_plot = data.frame(Infiltrat = stack(info[id_select, rownames(Immunoscore_BRCA)]),
+                       Class = rep(info[id_select, id_CT], nrow(Immunoscore_BRCA)))
+  
+data_plot$Class <- as.character(data_plot$Class)
+data_plot$Class[which(rep(info$shortLetterCode[id_select], nrow(Immunoscore_BRCA)) == "NT")] <- "NT"
+
+g = ggplot(data = data_plot, aes(x = Class, y = log2( Infiltrat.values), fill = Class))+
+  geom_boxplot(notch = TRUE)+
+    
+  scale_fill_manual(values = c( "hotpink3", "hotpink4"))+
+  scale_x_discrete(limits = c("OFF","ON"))+
+    
+  facet_grid(.~ Infiltrat.ind)  +
+    
+  labs(title = i, y="FC Cells",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g
+
+```
+
+# III.b. Checpoints
+```{r}
+gene_sub <- c("CD279",#PD1, je ne le trouve pas
+              "CD274", #PDL1
+              "CTLA4",
+              "IDO1", "FOXP3","LAG3", "HAVCR2",
+              "PDCD1LG2", #PDL2
+              "ICOS")
+rownames(data_fpkm)[grep("CD274",rownames(data_fpkm) )]
+
+ind <- which(rownames(data_fpkm) %in% gene_sub)
+
+subdata_data_fpkm=data_fpkm[ind,] # subset des lignes signatures
+
+rownames(subdata_data_fpkm)
+```
+```{r}
+info <- merge.data.frame(as.data.frame(colData(data_brca)), Factor_6_CT,
+                         "patient", "patient",all.x = T )
+
+info <- merge.data.frame(info, Factor_H_CT,
+                         "patient", "patient",all.x = T )
+
+#add fc
+subdata_data_fpkm_t <- subdata_data_fpkm %>% t %>% as.data.frame()
+subdata_data_fpkm_t$barcode <- gsub("\\.", "-", 
+                              x = colnames(subdata_data_fpkm))
+
+
+
+
+
+info <- merge.data.frame(info, subdata_data_fpkm_t,
+                         "barcode", "barcode",all.x = T )
+head(info)
+```
+
+
+```{r}
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select | 
+                     info$shortLetterCode == "NT")
+
+CT_select <- "factor"
+id_CT <- which(colnames(info) == CT_select)
+
+
+
+plot_l = list()
+
+for (i in rownames(subdata_data_fpkm)) {
+
+  
+ data_plot = data.frame(Infiltrat = info[id_select,i],
+                      
+                       Class = info[id_select, id_CT])
+ 
+ data_plot$Class[which(info$shortLetterCode[id_select] == "NT")] <- "NT"
+
+
+  g = ggplot(data = data_plot, aes(x = Class, y = log2(1+Infiltrat), color = Class))+
+  geom_boxplot(notch = F, size = 1, fill ="white", outlier.colour = "white")+
+    geom_jitter(size = 3, shape = 21) +
+ # scale_color_manual(values = c("darkslategray3","thistle1","deeppink4", "mediumorchid3", 
+      #                       "black"))+
+  scale_x_discrete(limits = c("NT", "OFF","Honly", "CTonly","ON"))+
+  labs(title= i, 
+       y="Expression level (log2)",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+  plot_l = c(plot_l, list(g))
+}
+plot_l
+```
+
+```{r}
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+
+for (i in rownames(subdata_data_fpkm)) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+  fit = aov(Infiltrat ~ Class, data = data_test) 
+
+    if( summary(fit)[[1]][["Pr(>F)"]][1] < 0.05) { # if signif : 
+    Tuck_test = TukeyHSD(fit)                       # Tuckey post-hoc
+    liste = c(liste, list(Tuck_test))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+
+## DMRTC2
+```{r}
+
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+liste = list()
+
+for (i in rownames(subdata_data_fpkm)) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+
+   res <- t.test(Infiltrat ~ Class, data = data_test) 
+
+    if( res$p.value < 0.05) { # if signif : 
+    liste = c(liste, list(res))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+
+
+
+```
+```{r}
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select | 
+                     info$shortLetterCode == "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+
+
+
+plot_l = list()
+
+for (i in rownames(subdata_data_fpkm)) {
+
+  
+ data_plot = data.frame(Infiltrat = info[id_select,i],
+                      
+                       Class = info[id_select, id_CT])
+ 
+ data_plot$Class[which(info$shortLetterCode[id_select] == "NT")] <- "NT"
+
+
+  g = ggplot(data = data_plot, aes(x = Class, y = log2(1+Infiltrat), color = Class))+
+  geom_boxplot(notch = F, size = 1, fill ="white", outlier.colour = "white")+
+    geom_jitter(size = 3, shape = 21) +
+ # scale_color_manual(values = c("darkslategray3","thistle1","deeppink4", "mediumorchid3", 
+      #                       "black"))+
+  scale_x_discrete(limits = c("NT", "OFF","Honly", "CTonly","ON"))+
+  labs(title= i, 
+       y="Expression level (log2)",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+  plot_l = c(plot_l, list(g))
+}
+plot_l
+```
+
+# IV. Histo
+
+```{r}
+id_histo <- grep("cgc_slide_percent",colnames(coldata_brca_complete))
+
+data_histo <- coldata_brca_complete[, id_histo]
+
+data_histo$barcode <- coldata_brca_complete$barcode
+
+head(data_histo)
+```
+
+
+```{r}
+info <- merge.data.frame(as.data.frame(colData(data_brca)), Factor_6_CT,
+                         "patient", "patient",all.x = T )
+
+info <- merge.data.frame(info, Factor_H_CT,
+                         "patient", "patient",all.x = T )
+
+info <- merge.data.frame(info, data_histo,
+                         "barcode", "barcode",all.x = T )
+head(info)
+```
+
+
+
+```{r}
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select | 
+                     info$shortLetterCode == "NT")
+
+CT_select <- "factor"
+id_CT <- which(colnames(info) == CT_select)
+
+names_histo <- colnames(coldata_brca_complete)[grep("cgc_slide_percent",colnames(coldata_brca_complete))]
+
+plot_l = list()
+
+for (i in names_histo) {
+
+  
+ data_plot = data.frame(Infiltrat = info[id_select,i],
+                      
+                       Class = info$factor[id_select])
+ 
+ data_plot$Class[which(info$shortLetterCode[id_select] == "NT")] <- "NT"
+
+
+  g = ggplot(data = data_plot, aes(x = Class, y = log2(1+Infiltrat), color = Class))+
+  geom_boxplot(notch = F, size = 1, fill ="white", outlier.colour = "white")+
+    geom_jitter(size = 3, shape = 21) +
+ # scale_color_manual(values = c("darkslategray3","thistle1","deeppink4", "mediumorchid3", 
+      #                       "black"))+
+  scale_x_discrete(limits = c("NT", "OFF","Honly", "CTonly","ON"))+
+  labs(title= i, 
+       y="Expression level (log2)",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+  plot_l = c(plot_l, list(g))
+}
+plot_l
+```
+
+```{r}
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "factor"
+id_CT <- which(colnames(info) == CT_select)
+
+for (i in names_histo) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+  fit = aov(Infiltrat ~ Class, data = data_test) 
+
+    if( summary(fit)[[1]][["Pr(>F)"]][1] < 0.05) { # if signif : 
+    Tuck_test = TukeyHSD(fit)                       # Tuckey post-hoc
+    liste = c(liste, list(Tuck_test))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+```{r}
+id_immuno <- which(colnames(info) %in% c("cgc_slide_percent_monocyte_infiltration",
+                                    "cgc_slide_percent_lymphocyte_infiltration",
+                                    "cgc_slide_percent_neutrophil_infiltration"))
+
+info$ihc_immuno <- rowSums(info[, id_immuno])
+
+
+sub_select <- "Basal"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "factor"
+id_CT <- which(colnames(info) == CT_select)
+
+data_test = data.frame(Infiltrat = info[id_select,"ihc_immuno" ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+  fit = aov(Infiltrat ~ Class, data = data_test) 
+
+if( summary(fit)[[1]][["Pr(>F)"]][1] < 0.05) { # if signif : 
+ TukeyHSD(fit)                       # Tuckey post-hoc
+}
+
+summary(fit)
+```
+
+
+```{r}
+  g = ggplot(data = data_test, aes(x = Class, y = Infiltrat, color = Class))+
+  geom_boxplot(notch = F, size = 1, fill ="white", outlier.colour = "white")+
+    geom_jitter(size = 3, shape = 21) +
+ # scale_color_manual(values = c("darkslategray3","thistle1","deeppink4", "mediumorchid3", 
+      #                       "black"))+
+  scale_x_discrete(limits = c("NT", "OFF","Honly", "CTonly","ON"))+
+  labs(title= "IHC immuno %", 
+       y="Expression level (log2)",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g
+```
+## DMRTC2
+
+
+```{r}
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+
+
+liste = list()
+
+for (i in names_histo) {
+  data_test = data.frame(Infiltrat = info[id_select,i ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+
+   res <- t.test(Infiltrat ~ Class, data = data_test) 
+
+    if( res$p.value < 0.05) { # if signif : 
+    liste = c(liste, list(res))              
+    names(liste)[length(liste)] = i
+  }
+}
+liste
+```
+
+
+```{r}
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+
+
+names_histo <- colnames(coldata_brca_complete)[grep("cgc_slide_percent",colnames(coldata_brca_complete))]
+
+plot_l = list()
+
+for (i in names_histo) {
+
+  
+ data_plot = data.frame(Infiltrat = info[id_select,i],
+                      
+                       Class = info[id_select, id_CT])
+ 
+ data_plot$Class[which(info$shortLetterCode[id_select] == "NT")] <- "NT"
+
+
+  g = ggplot(data = data_plot, aes(x = Class, y = Infiltrat, color = Class))+
+  geom_boxplot(notch = F, size = 1, fill ="white", outlier.colour = "white")+
+    geom_jitter(size = 3, shape = 21) +
+ # scale_color_manual(values = c("darkslategray3","thistle1","deeppink4", "mediumorchid3", 
+      #                       "black"))+
+  scale_x_discrete(limits = c("NT", "OFF","Honly", "CTonly","ON"))+
+  labs(title= i, 
+       y="Expression level (log2)",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+  plot_l = c(plot_l, list(g))
+}
+plot_l
+```
+```{r}
+id_immuno <- which(colnames(info) %in% c("cgc_slide_percent_monocyte_infiltration",
+                                    "cgc_slide_percent_lymphocyte_infiltration",
+                                    "cgc_slide_percent_neutrophil_infiltration"))
+
+info$ihc_immuno <- rowSums(info[, id_immuno])
+
+
+sub_select <- "Her2"
+id_select <- which(info$subtype_BRCA_Subtype_PAM50 == sub_select & 
+                     info$shortLetterCode != "NT")
+
+CT_select <- "DMRTC2"
+id_CT <- which(colnames(info) == CT_select)
+
+data_test = data.frame(Infiltrat = info[id_select,"ihc_immuno" ],
+                       Class = info[id_select, id_CT]
+                       
+                       )
+  
+
+res <- t.test(Infiltrat ~ Class, data = data_test) 
+
+res
+```
+
+
+```{r}
+  g = ggplot(data = data_test, aes(x = Class, y = Infiltrat, color = Class))+
+  geom_boxplot(notch = F, size = 1, fill ="white", outlier.colour = "white")+
+    geom_jitter(size = 3, shape = 21) +
+ # scale_color_manual(values = c("darkslategray3","thistle1","deeppink4", "mediumorchid3", 
+      #                       "black"))+
+  scale_x_discrete(limits = c("NT", "OFF","Honly", "CTonly","ON"))+
+  labs(title= "IHC immuno %", 
+       y="Expression level (log2)",x="Tumor subtypes",cex=14)+
+  theme_classic()+ 
+ theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 12),
+              axis.text.y=element_text(colour="black", size = 12),
+      legend.position="none")
+
+g
+```
+
+
+
+
+
+
+
+
+
+
+
