@@ -1,0 +1,611 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#I. Intro
+
+This notebook explain how to generate the graphe for the figure 4 : correlation between methylation and expression for CT83 and HORMAD1 genes
+
+## Packages
+
+```{r message=FALSE, warning=FALSE}
+library(SummarizedExperiment)
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(Hmisc)
+library(grid)
+library(Gviz)
+
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+```
+
+
+## Datas
+```{r}
+Selected_CT <- read.delim("./data/Selected_CT_MeanInf1.txt", 
+                            sep = "\t", header = TRUE)
+
+# SummarizedExperiment with expression data for TCGA breast samples, download from TCGA, 139 Testis genes exp only
+data_brca_exp <- readRDS(file = "./data/exp_brca_139TS.rds")
+
+# SummarizedExperiment with methylation data for TCGA breast samples, download from TCGA, probes from the 139 Testis genes exp only
+data_brca_met <- readRDS(file = "./data/met_brca_139TS.rds")
+
+```
+
+
+## Function
+```{r}
+equation = function(x) {
+  lm_coef <- list(r = round(x$estimate, digits = 2),
+                  P = x$p.value);
+  lm_eq <- substitute(bold(Pearson)*":"~~italic(R) == r*","~~italic(pvalue)~"="~P,lm_coef)
+  as.character(as.expression(lm_eq));                 
+    }               
+
+```
+
+
+
+
+
+# 1. Probes annotations : 
+```{r}
+Subtype = colData(data_brca_exp)$subtype_BRCA_Subtype_PAM50
+Subtype = as.character(Subtype)
+Subtype[which(colData(data_brca_exp)$shortLetterCode == "NT")] = "NT"
+Subtype = as.factor(Subtype)
+```
+
+
+```{r}
+annotation.meth = rowData(data_brca_met)
+
+head(annotation.meth, 1) 
+```
+
+
+
+# 2. CT83
+## Granges
+
+```{r}
+#Probes associated with CT83
+Gene_int = "CXorf61"
+
+#Combien a t on de probes ? 
+subset(annotation.meth, Gene_Symbol == Gene_int) %>% dim
+class(subset(annotation.meth, Gene_Symbol == Gene_int))
+```
+10 probes around CT83
+We x=want to vizualize them, using Gviz. 
+
+Gviz take as input GRanges object: we make a subset of methylation data with our probes of interes, and we transform this in GRange. 
+
+
+```{r}
+data = subset(annotation.meth, Gene_Symbol %in% Gene_int)
+
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand)))
+gr
+```
+```{r}
+#Add annotation from selected CpG
+atr <- AnnotationTrack(gr, name="CXorf61")
+
+#Add chromosome draw
+grt <- GenomeAxisTrack()
+itr <- IdeogramTrack(genome = "hg19", chromosome = data$chr[1]) # 
+
+#A dd gene region track : V1
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+txTr <- GeneRegionTrack(txdb, chromosome = data$chr[1], start = c(min(data$pos)-10^4), 
+                        end = c(max(data$pos) + 10^4),
+                        name = "Gene Model", showID=TRUE, symbol = "HORMAD1")
+
+plotTracks(list(itr, grt, atr, txTr),  shape = "arrow",
+    transcriptAnnotation = "symbol")
+
+# Add gene region track V2 using BioMarthe : il faut une connexion r�seau
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
+                                    chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
+                        end = c(max(data$pos)+10^2))
+
+feature(biomTrack)
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "darkgreen",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+
+plotTracks(list(itr, grt, atr, biomTrack), 
+    transcriptAnnotation = "symbol", 
+    from = c(min(data$pos)-2*10^3), to = c(max(data$pos)+2*10^3))
+```
+
+##Correlation : 
+
+Select vector of expression and methyaltion : 
+
+```{r}
+Gene_int = "CXorf61"
+
+probes1 = annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),]$probeID
+
+#SUbset methylation for these probes
+met_ct_1 = subset(assay(data_brca_met), rownames(data_brca_met) %in% probes1)
+
+rownames(met_ct_1) = paste(annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),
+                                               ]$UCSC_RefGene_Group,
+                               rownames(met_ct_1), sep="_") #Pour annoter mieux les CpG selon localisation
+
+# CT83 expression
+Gene_int = "CT83"
+
+ENS_ct <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+exp_ct_1 = subset(assay(data_brca_exp), rownames(data_brca_exp) %in% ENS_ct$ENSEMBL)
+dim(exp_ct_1)
+```
+
+Categorize per expression levels : 
+
+```{r}
+exp_ct_1 = data.frame( expression = c(exp_ct_1), Statut = Subtype, Type = Subtype) 
+
+seuil_ct= mean(exp_ct_1$expression[which(exp_ct_1$Statut == "NT")]) +  3*sd(exp_ct_1$expression[which(exp_ct_1$Statut == "NT")])
+
+
+exp_ct_1 <- exp_ct_1 %>% 
+                mutate(State_quantile = ifelse(exp_ct_1[,1] <= c(seuil_ct), 
+                                               paste("Low", Gene_int, sep = "_"),
+                                        ifelse(exp_ct_1[,1] > c(seuil_ct), 
+                                               paste("High", Gene_int, sep = "_"), 
+                                         "NS"
+                                               )
+                                          )
+                      )
+
+#On remplace les NT
+exp_ct_1$State_quantile[ which(Subtype=="NT")] <- "NT"
+exp_ct_1 %>% head
+```
+
+```{r}
+#On assemble méthylation et expression
+exp_met_ct_1 = data.frame(exp_ct_1, t(met_ct_1))
+exp_met_ct_1 %>% head
+
+exp_met_ct_1 <- data.frame(barcode = rep(colData(data_brca_exp)$barcode, length(probes1)),
+                               ENSG00000143452 = rep(exp_ct_1[,1], length(probes1)),
+                               Statut = rep(exp_ct_1$Statut, length(probes1)),
+                               Type = rep(exp_ct_1$Type, length(probes1)),
+                               State_quantile = rep(exp_ct_1$State_quantile, 
+                                                    length(probes1)),
+                               gather(data = exp_met_ct_1[,5:c(length(probes1)+4)], 
+                                     key = "Cg", 
+                                     value = "meth") )
+
+exp_met_ct_1 %>% head
+```
+
+
+## Mean methylatuin on a region
+```{r}
+name_CpG_TSS200 = exp_met_ct_1$Cg[grep("TSS200",exp_met_ct_1$Cg )] %>% unique
+
+
+exp_met_ct_1_sub <- subset(exp_met_ct_1, Cg %in% name_CpG_TSS200)
+
+Moyennes_ct <- by(exp_met_ct_1_sub$meth, exp_met_ct_1_sub$barcode, mean)
+
+
+
+Table_moyennese <- data.frame(barcode = names(c(Moyennes_ct)),
+                             Patient = colData(data_brca_exp)$patient,
+                             Moy = c(Moyennes_ct), 
+                             exp = exp_ct_1$expression,
+                             Statut = exp_ct_1$Statut,
+                             Type = exp_ct_1$Type,
+                             State_quantile = exp_ct_1$State_quantile
+                             )
+
+head(Table_moyennese)
+```
+
+## Plot
+```{r}
+g1 = ggplot(data = Table_moyennese, 
+       aes(x = log2(1+exp), y = Moy, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm", se=FALSE) +
+  facet_wrap(~Type) +
+  scale_color_manual(values=c("red4", "black","grey20", "grey20"))+
+  labs(title="Correlation CT83 exp / Mean TSS200 meth \n Basal (Breast)", y="beta value",x="log2(CT83 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+
+
+```{r}
+fit <- cor.test(subset(Table_moyennese, Type == "Basal")$Moy, subset(Table_moyennese, Type == "Basal")$exp)
+
+ggplot(data = subset(Table_moyennese, Type == "Basal"),
+       aes(x = log2(1+exp), y = Moy, color = State_quantile ))+
+  geom_point(size = 2, shape = 1)+
+  geom_smooth(colour = "black",fill="white", method = "lm", se=FALSE) +
+  scale_color_manual(values=c("red4", "black","grey20", "grey20"))+
+  labs(title="Correlation CT83 exp / Mean TSS200 meth \n Basal (Breast)", x="beta value",y="log2(CT83 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9)) +
+      annotate("text", x = 2.5, y = 0.15, label = equation(fit), parse = TRUE)
+
+```
+
+# 3. HORMAD1
+
+
+## Granges
+
+```{r}
+#Probes associated with HORMAD1
+Gene_int = "HORMAD1"
+
+#Combien a t on de probes ? 
+subset(annotation.meth, Gene_Symbol == Gene_int) %>% dim
+class(subset(annotation.meth, Gene_Symbol == Gene_int))
+```
+9 probes around HORMAD1
+We x=want to vizualize them, using Gviz. 
+
+Gviz take as input GRanges object: we make a subset of methylation data with our probes of interes, and we transform this in GRange. 
+
+
+```{r}
+data = subset(annotation.meth, Gene_Symbol %in% Gene_int)
+
+gr <- GRanges(
+    seqnames = Rle(data$chr),
+    ranges = IRanges(data$pos, end = c(data$pos+1), names = data$probeID),
+    strand = Rle(strand(data$strand)))
+gr
+```
+```{r}
+#Add annotation from selected CpG
+atr <- AnnotationTrack(gr, name="HORMAD1")
+
+#Add chromosome draw
+grt <- GenomeAxisTrack()
+itr <- IdeogramTrack(genome = "hg19", chromosome = data$chr[1]) # 
+
+#A dd gene region track : V1
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+txTr <- GeneRegionTrack(txdb, chromosome = data$chr[1], start = c(min(data$pos)-10^4), 
+                        end = c(max(data$pos) + 10^4),
+                        name = "Gene Model", showID=TRUE, symbol = "HORMAD1")
+
+plotTracks(list(itr, grt, atr, txTr),  shape = "arrow",
+    transcriptAnnotation = "symbol")
+
+# Add gene region track V2 using BioMarthe : il faut une connexion r�seau
+biomTrack <- BiomartGeneRegionTrack(genome = "hg19",name = "Gene_Model",
+                                    chromosome = data$chr[1], start = c(min(data$pos)-10^2), 
+                        end = c(max(data$pos)+10^2))
+
+feature(biomTrack)
+displayPars(biomTrack) <- list("utr5" = "darkred",
+                               "protein_coding" = "black",
+                               "utr3" = "darkgreen",
+                               "non_coding" = "white",
+                               "snRNA" = "white",
+                               "miRNA" = "white",
+                               "misc_RNA_pseudogene" = "white",
+                               "tRNA_pseudogene" = "white",
+                               "snRNA_pseudogene" = "white")
+
+plotTracks(list(itr, grt, atr, biomTrack), 
+    transcriptAnnotation = "symbol", 
+    from = c(min(data$pos)-10^4), to = c(max(data$pos)+10^4))
+```
+
+##Correlation : 
+
+Select vector of expression and methyaltion : 
+
+```{r}
+Gene_int = "HORMAD1"
+
+probes1 = annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),]$probeID
+
+#SUbset methylation for these probes
+met_ct_1 = subset(assay(data_brca_met), rownames(data_brca_met) %in% probes1)
+
+rownames(met_ct_1) = paste(annotation.meth[grep(Gene_int, annotation.meth$Gene_Symbol),
+                                               ]$UCSC_RefGene_Group,
+                               rownames(met_ct_1), sep="_") #Pour annoter mieux les CpG selon localisation
+
+# CT83 expression
+Gene_int = "HORMAD1"
+
+ENS_ct <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+exp_ct_1 = subset(assay(data_brca_exp), rownames(data_brca_exp) %in% ENS_ct$ENSEMBL)
+dim(exp_ct_1)
+```
+
+Categorize per expression levels : 
+
+```{r}
+exp_ct_1 = data.frame( expression = c(exp_ct_1), Statut = Subtype, Type = Subtype) 
+
+seuil_ct= mean(exp_ct_1$expression[which(exp_ct_1$Statut == "NT")]) +  3*sd(exp_ct_1$expression[which(exp_ct_1$Statut == "NT")])
+
+
+exp_ct_1 <- exp_ct_1 %>% 
+                mutate(State_quantile = ifelse(exp_ct_1[,1] <= c(seuil_ct), 
+                                               paste("Low", Gene_int, sep = "_"),
+                                        ifelse(exp_ct_1[,1] > c(seuil_ct), 
+                                               paste("High", Gene_int, sep = "_"), 
+                                         "NS"
+                                               )
+                                          )
+                      )
+
+#On remplace les NT
+exp_ct_1$State_quantile[ which(Subtype=="NT")] <- "NT"
+exp_ct_1 %>% head
+```
+
+```{r}
+#On assemble méthylation et expression
+exp_met_ct_1 = data.frame(exp_ct_1, t(met_ct_1))
+exp_met_ct_1 %>% head
+
+exp_met_ct_1 <- data.frame(barcode = rep(colData(data_brca_exp)$barcode, length(probes1)),
+                               ENSG00000143452 = rep(exp_ct_1[,1], length(probes1)),
+                               Statut = rep(exp_ct_1$Statut, length(probes1)),
+                               Type = rep(exp_ct_1$Type, length(probes1)),
+                               State_quantile = rep(exp_ct_1$State_quantile, 
+                                                    length(probes1)),
+                               gather(data = exp_met_ct_1[,5:c(length(probes1)+4)], 
+                                     key = "Cg", 
+                                     value = "meth") )
+
+exp_met_ct_1 %>% head
+```
+
+
+## Mean methylatuin on a region
+```{r}
+name_CpG_TSS200 = exp_met_ct_1$Cg[grep("TSS200",exp_met_ct_1$Cg )] %>% unique
+
+
+exp_met_ct_1_sub <- subset(exp_met_ct_1, Cg %in% name_CpG_TSS200)
+
+Moyennes_ct <- by(exp_met_ct_1_sub$meth, exp_met_ct_1_sub$barcode, mean)
+
+
+
+Table_moyennese <- data.frame(barcode = names(c(Moyennes_ct)),
+                             Patient = colData(data_brca_exp)$patient,
+                             Moy = c(Moyennes_ct), 
+                             exp = exp_ct_1$expression,
+                             Statut = exp_ct_1$Statut,
+                             Type = exp_ct_1$Type,
+                             State_quantile = exp_ct_1$State_quantile
+                             )
+
+head(Table_moyennese)
+```
+
+## Plot
+```{r}
+g1 = ggplot(data = Table_moyennese, 
+       aes(x = log2(1+exp), y = Moy, color = State_quantile ))+
+  geom_point()+
+  geom_smooth(colour = "black",fill="white", method = "lm", se=FALSE) +
+  facet_wrap(~Type) +
+  scale_color_manual(values=c("red4", "black","grey20", "grey20"))+
+  labs(title="Correlation HORMAD1 exp / Mean TSS200 meth \n Basal (Breast)", y="beta value",x="log2(CT83 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+
+g1
+```
+
+
+```{r}
+fit <- cor.test(subset(Table_moyennese, Type == "Basal")$Moy, subset(Table_moyennese, Type == "Basal")$exp)
+
+ggplot(data = subset(Table_moyennese, Type == "Basal"),
+       aes(x = log2(1+exp), y = Moy, color = State_quantile ))+
+  geom_point(size = 2, shape = 1)+
+  geom_smooth(colour = "black",fill="white", method = "lm", se=FALSE) +
+  scale_color_manual(values=c("red4", "black","grey20", "grey20"))+
+  labs(title="Correlation HORMAD1 exp / Mean TSS200 meth \n Basal (Breast)", x="beta value",y="log2(CT83 expression)",cex=10)+
+  scale_y_continuous(limits = c(0,1))+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9)) +
+      annotate("text", x = 2.5, y = 0.15, label = equation(fit), parse = TRUE)
+
+```
+
+
+# 4. Bee nest
+
+```{r}
+exp_met <- data.frame(exp = NA, TypeCpG = NA, row = NA, col = NA, value = NA, gene = NA)
+
+for (gene in unique(rowData(data_brca_exp)$gene_id)) {
+  print(gene)
+  if (gene == "CT83") {
+    gene2 = "CXorf61"
+  }else{
+    gene2 = gene
+  }
+  
+  Exp = assay(data_brca_exp)[which( rowData(data_brca_exp)$gene_id == gene),]
+  
+  probes1 = annotation.meth[grep(gene2, annotation.meth$Gene_Symbol),]$probeID
+  Meth = subset(assay(data_brca_met), rownames(data_brca_met) %in% probes1)
+  annoMeth = rowData(data_brca_met)[which(rownames(data_brca_met) %in% probes1),]
+  
+  if (is.null(dim(Exp))==FALSE) { # If there is different isoforms, take the mean expression
+    Exp <- apply(Exp, 2, mean)
+  }
+  
+  if (is.null(dim(Meth)) == TRUE) { # If there is oly one probe for a gene
+    dt = data.frame(exp = Exp,
+                  TypeCpG = annoMeth$UCSC_RefGene_Group,
+                  row = rep(annoMeth$probeID, length(Meth)),
+                  col = names(Meth),
+                  value = Meth,
+                  gene = rep(gene,length(Meth)))
+  
+  exp_met <- rbind(exp_met, dt)
+  
+  }else{ # If there is many probes for a gene
+  
+  dt = data.frame(exp = rep(Exp, each = nrow(Meth) ),
+                  TypeCpG = rep(annoMeth$UCSC_RefGene_Group,  ncol(Meth)),
+                   Meth %>% stack() %>% data.frame(),
+                  gene = rep(gene, nrow( Meth %>% stack() %>% data.frame())))
+  
+  exp_met <- rbind(exp_met, dt)
+  }
+                  
+}
+
+exp_met <- exp_met[-1,]
+
+
+exp_met %>% head
+```
+
+```{r}
+correlation <- by(data = exp_met, INDICES =  exp_met$row, 
+                  FUN = (function(X){
+                    if (is.na(X$value)==TRUE) {
+                    return(NA)
+                  }else{
+                    cor.test(X$exp, X$value)$estimate}
+                    }))
+
+correlation_p <- by(data = exp_met, INDICES = exp_met$row, 
+                    FUN = (function(X){
+                    if (is.na(X$value)==TRUE) {
+                    return(NA)
+                  }else{
+                    cor.test(X$exp, X$value)$p.value}
+                      }))
+
+dt_cor <- data.frame(correlation = c(t(correlation)), pvalue = c(t(correlation_p)), 
+                     CpG = c(names(correlation)),
+                     Type_CpG = exp_met$TypeCpG[which(duplicated(exp_met$row)==F)][order( exp_met$row[which(duplicated(exp_met$row)==F)] )],
+                     Gene = exp_met$gene[which(duplicated(exp_met$row)==F)][order( exp_met$row[which(duplicated(exp_met$row)==F)] )])
+
+head(dt_cor)
+```
+
+```{r}
+dt_cor$correlation %>% sort(., decreasing = F) %>% head
+```
+
+```{r}
+by(data = dt_cor, INDICES = dt_cor$Gene, FUN = function(X){min(X$correlation, na.rm = T)}) %>% 
+  sort(., decreasing = F) %>% head(., 10)
+```
+
+
+```{r}
+top10 <- by(data =dt_cor, INDICES = dt_cor$Gene, FUN = function(X){min(X$correlation, na.rm = T)}) %>% 
+  sort(., decreasing = F) %>% head(., 10) %>% names
+
+
+id_top10 <- which(dt_cor$Gene %in% top10 )
+
+dt_cor$label_top <- rep(NA, nrow(dt_cor))
+dt_cor$label_top[id_top10] <- dt_cor$Gene[id_top10] %>% as.character()
+
+```
+
+
+
+```{r}
+library(ggplot2)
+
+
+ggplot(data = dt_cor, aes(x = correlation, y = -log10(pvalue)))+
+  geom_hex(bins = 25)+
+  scale_fill_distiller(palette= "Spectral", direction=-1) +
+  geom_point(data = dt_cor[id_top10,], aes(x = correlation, y = -log10(pvalue),
+                                                            color = label_top),
+             # position = position_jitterdodge(jitter.width = 0.2, jitter.height = 0.8,
+            #                       dodge.width = 0.75, seed = NA),
+             shape = 1, size = 3)+
+  scale_color_manual(values = c("grey5", "orange", "grey15", "red", "grey25", "grey35",
+                                "grey45","grey55", "grey65", "grey75", "grey85"))+
+  
+ # facet_grid( . ~ Relation_to_Island )+
+  
+  geom_hline(yintercept = -log10(0.05))+
+  geom_vline(xintercept = c(0, 0.5, -0.5))+
+  scale_x_continuous(limits = c(-1, 1))+
+
+  labs(main =  "139 Selected C/T genes: Link with methylation",
+        x="R Pearson",y="p-value")+     
+  theme_classic()+                                                     # thème blanc
+  theme(plot.title = element_text(size = 12,hjust=0.5),    #titre en gras, centré
+              text=element_text(),
+              axis.title = element_text( size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+
+```
+
+
+
+
+
+
