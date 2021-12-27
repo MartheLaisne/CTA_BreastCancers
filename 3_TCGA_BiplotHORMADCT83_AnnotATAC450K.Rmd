@@ -1,0 +1,304 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Intro
+
+## Data
+
+```{r}
+Factor_H_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/patient_breast_all.txt", header = T, sep = "\t")
+
+Factor_6_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/Factor_6_CT_patient_breast_all.txt", header = T, sep = "\t")
+
+coldata_brca_complete <- readRDS("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190510_Breast_CaracterisationHormadCT83_RF/coldata_brca_complete.rds")
+
+
+
+
+data_brca <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/data_brca.rds")
+head(Factor_H_CT)
+```
+
+
+## Lib
+```{r}
+library(dplyr)
+library(SummarizedExperiment)
+
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(scales)
+
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+```
+# Contruction
+```{r}
+# Grep expression vectors for HORMAD1 and CT83
+Gene_int = "HORMAD1"
+
+
+k <- which(rowData(data_brca)$gene_id  ==  Gene_int )
+
+XP_Hormad <- assay(data_brca, 2)[k,]*10^6
+
+
+Gene_int = "CT83"
+
+
+k <-  which(rowData(data_brca)$gene_id  ==  Gene_int )
+
+XP_CT83 <- assay(data_brca, 2)[k,]*10^6
+
+
+par(mfrow=c(1,2)) 
+plot(sort(t(XP_Hormad)))
+plot(sort(t(XP_CT83)))
+```
+
+
+```{r}
+sample_ATAC <- read.table("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/RNA_ATAC.txt", quote="\"", comment.char="")
+
+sample_CNV <- read.table("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/RNA_CNV.txt", quote="\"", comment.char="")
+ 
+sample_450K <- read.table("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/RNA_Meth.txt", quote="\"", comment.char="")
+```
+
+
+```{r}
+id_basal <- which(colData(data_brca)$subtype_BRCA_Subtype_PAM50 == "Basal")
+
+data <- data.frame(HORMAD1 = (XP_Hormad)[id_basal],CT83 = (XP_CT83)[id_basal])
+data$type <- Factor_H_CT$factor[id_basal]
+
+
+id_int <- which(colData(data_brca)$patient[id_basal] %in% sample_ATAC$V1)
+data$infoATAC <- rep("RNAonly", nrow(data))
+data$infoATAC[id_int] <- "RNA & ATAC"
+
+id_int <- which(colData(data_brca)$patient[id_basal] %in% sample_450K$V1)
+data$info450 <- rep("RNAonly", nrow(data))
+data$info450[id_int] <- "RNA & 450K"
+
+id_int <- which(colData(data_brca)$patient[id_basal] %in% sample_CNV$V1)
+data$infoCNV <- rep("RNAonly", nrow(data))
+data$infoCNV[id_int] <- "RNA & CNV"
+
+
+library(ggplot2)
+
+ggplot(data = data, aes(x = log2(1+HORMAD1), y = log2(1+CT83), shape = info450, 
+                        color = type  ))+
+  geom_jitter(size = 3,  na.rm = F, position=position_jitter(0.1)) + 
+ # geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+  #geom_hline(yintercept = (1+thr_ct))+
+  #geom_vline(xintercept = (1+thr_h)) +
+  
+  scale_shape_manual(values = c(0, 2))+
+#  scale_x_continuous(trans = 'log10', limits = c(0.1, 10^7))+
+#  scale_y_continuous(trans = 'log10', limits = c(0.1, 10^7))+
+
+  
+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+```{r}
+Infototal <- rep("RNAonly", nrow(data))
+
+Infototal[which(data$infoATAC == "RNA & ATAC" & 
+                 data$info450 == "RNA & 450K" & 
+                  data$infoCNV == "RNA & CNV")] <- "RNA CNV 405K ATAC"
+
+Infototal[which(data$infoATAC == "RNAonly" & 
+                 data$info450 == "RNA & 450K" & 
+                  data$infoCNV == "RNA & CNV")] <- "RNA CNV 450K"
+
+Infototal[which(data$infoATAC == "RNA & ATAC" & 
+                 data$info450 == "RNAonly" & 
+                  data$infoCNV == "RNA & CNV")] <- "RNA CNV ATAC"
+
+Infototal[which(data$infoATAC == "RNA & ATAC" & 
+                 data$infoCNV == "RNA & 450K" & 
+                  data$infoCNV == "RNAonly")] <- "RNA CNV 405K"
+
+Infototal[which(data$infoATAC == "RNA & ATAC" & 
+                 data$info450 == "RNAonly" & 
+                  data$infoCNV == "RNAonly")] <- "RNA ATAC"
+
+Infototal[which(data$infoATAC == "RNAonly" & 
+                 data$info450 == "RNAonly" & 
+                  data$infoCNV == "RNA & CNV")] <- "RNA CNV"
+
+Infototal[which(data$infoATAC == "RNAonly" & 
+                 data$info450 == "RNA & 450K" & 
+                  data$infoCNV == "RNAonly")] <- "405K"
+
+table(Infototal)
+
+```
+```{r}
+ggplot(data = data, aes(x = log2(1+HORMAD1), y = log2(1+CT83),color = Infototal  ))+
+  geom_jitter(size = 3,  shape = 1, na.rm = F, position=position_jitter(0.1)) + 
+ # geom_rug(outside = TRUE)+
+  #geom_hline(yintercept = (1+thr_ct))+
+  #geom_vline(xintercept = (1+thr_h)) +
+  
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+#Thr HORMAD1
+d <- density(x=log2(1+t(XP_Hormad[])), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_h <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_h <- c(variations_h,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_h], col = "red")
+
+thr_h <- d$x[variations_h][4]
+
+#Thr CT83
+d <- density(x=log2(1+t(XP_CT83[])), kernel="gaussian", bw = bw_fix)
+first<-diff(d$y)/diff(d$x)
+variations_ct <-c()
+for(k in 2:length(first)){
+    if(sign(first[k]) != sign(first[k-1])){
+         variations_ct <- c(variations_ct,k)
+    }
+}
+plot(d)
+abline(v = d$x[variations_ct], col = "red")
+
+thr_ct <- d$x[variations_ct][4]
+
+
+```
+
+
+```{r}
+# THR based on HORMAD1 (r. CT83) expression in all tumors samples
+#thr_h <-  mean(t(XP_Hormad_NT))+2*sd(t(XP_Hormad_NT))
+#thr_ct <-  mean(t(XP_CT83_NT))+2*sd(t(XP_CT83_NT))
+
+
+Factor_H_CT <- data.frame(factor = rep(NA, length(t(XP_Hormad))), 
+                          patient = rep(NA, length(t(XP_Hormad))))
+
+id_ON <- which(log2(1+t(XP_CT83)) > thr_ct & log2(1+t(XP_Hormad)) > thr_h )
+Factor_H_CT[id_ON, "factor"] <- "ON"
+Factor_H_CT[id_ON, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_ON]
+
+id_CT <- which(log2(1+t(XP_CT83) )> thr_ct & log2(1+t(XP_Hormad)) <= thr_h )
+Factor_H_CT[id_CT, "factor"] <- "CTonly"
+Factor_H_CT[id_CT, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_CT]
+
+id_H <- which(log2(1+t(XP_CT83)) <= thr_ct & log2(1+t(XP_Hormad)) > thr_h )
+Factor_H_CT[id_H, "factor"] <- "Honly"
+Factor_H_CT[id_H, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_H]
+
+id_OFF <- which(log2(1+t(XP_CT83)) <= thr_ct & log2(1+t(XP_Hormad)) <= thr_h )
+Factor_H_CT[id_OFF, "factor"] <- "OFF"
+Factor_H_CT[id_OFF, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_OFF]
+
+
+table(Factor_H_CT$factor)
+table(Factor_H_CT$factor[id_basal])
+
+```
+> colData(dds)$paper_BRCA_Subtype_PAM50 <- colData(BRCA_basal_counts)$paper_BRCA_Subtype_PAM50
+> colData(dds)$paper_patient <- colData(BRCA_basal_counts)$paper_patient
+> colData(dds)$shortLetterCode <- colData(BRCA_basal_counts)$shortLetterCode
+
+```{r}
+par(mfrow=c(1,2)) 
+plot(sort(t(XP_Hormad_b)))
+abline(h = thr_h)
+plot(sort(t(XP_CT83_b)))
+abline(h = thr_ct)
+
+```
+```{r}
+id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
+
+data <- data.frame(HORMAD1 = (XP_Hormad_b),CT83 = (XP_CT83_b))
+data$type <- Factor_H_CT$factor[id_basal]
+
+
+id_int <- which(colData(BRCA_breast_FPKMUQ)$paper_patient[id_basal] %in% sample_ATAC$V1)
+data$infoATAC <- rep("RNAonly", nrow(data))
+data$infoATAC[id_int] <- "RNA & ATAC"
+
+id_int <- which(colData(BRCA_breast_FPKMUQ)$paper_patient[id_basal] %in% sample_450K$V1)
+data$info450 <- rep("RNAonly", nrow(data))
+data$info450[id_int] <- "RNA & 450K"
+
+id_int <- which(colData(BRCA_breast_FPKMUQ)$paper_patient[id_basal] %in% sample_CNV$V1)
+data$infoCNV <- rep("RNAonly", nrow(data))
+data$infoCNV[id_int] <- "RNA & CNV"
+
+
+library(ggplot2)
+
+ggplot(data = data, aes(x = (1+HORMAD1), y = (1+CT83), shape = info450, color = infoATAC  ))+
+  geom_jitter(size = 3,  na.rm = F, position=position_jitter(0.1)) + 
+  geom_rug(outside = TRUE)+
+  coord_cartesian(clip = "off")+
+  geom_hline(yintercept = (1+thr_ct))+
+  geom_vline(xintercept = (1+thr_h)) +
+  
+  scale_shape_manual(values = c(0, 2))+
+  scale_x_continuous(trans = 'log10', limits = c(0.1, 10^7))+
+  scale_y_continuous(trans = 'log10', limits = c(0.1, 10^7))+
+
+  
+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```

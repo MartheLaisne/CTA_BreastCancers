@@ -1,0 +1,1321 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Intro
+
+## Lib
+```{r}
+
+```
+
+
+
+## Data
+```{r}
+# ATACseq data
+BRCA_log2norm <- read.delim("~/Desktop/210622_TCGA_ATAC/TCGA-ATAC_Cancer_Type-specific_Count_Matrices_log2norm_counts/BRCA_log2norm.txt")
+TCGA_ATAC_BRCA <- read.delim2("~/Desktop/210622_TCGA_ATAC/TCGA_ATAC_BRCA.txt")
+
+#RNAseq data
+#data_exp
+Factor_H_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/patient_breast_all.txt", header = T, sep = "\t")
+
+```
+
+
+```{r}
+# Same order for ATACseq annotation & ATACseq counts data
+TCGA_ATAC_BRCA <- TCGA_ATAC_BRCA[order(TCGA_ATAC_BRCA$Library_Name),]
+
+id <- 6:ncol(BRCA_log2norm)
+
+BRCA_log2norm[, id] <- BRCA_log2norm[, id][order(colnames(BRCA_log2norm[, id]))]
+
+head(BRCA_log2norm) ; head(TCGA_ATAC_BRCA)
+```
+```{r}
+
+id_match <-  match(TCGA_ATAC_BRCA$submitter_id , 
+                   substr(Factor_H_CT$patient, start = 1, stop  = 12)) 
+
+
+Factor_H_CT_sub <- Factor_H_CT[id_match,]
+
+head(Factor_H_CT_sub) ; head(TCGA_ATAC_BRCA$submitter_id )
+```
+
+
+# Correlation
+```{r}
+
+BRCA_breast_DESeq2 <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/Breast_basal_DESEq2.rds")
+```
+
+
+
+```{r}
+#Same order for RNAseq data
+library(SummarizedExperiment)
+RNA_order = data.frame(matrix(nrow = nrow(BRCA_breast_DESeq2), ncol = 141))
+
+
+for (col in 1:141) {
+     k = which(colData(BRCA_breast_DESeq2)$paper_patient == TCGA_ATAC_BRCA$submitter_id[col] & colData(BRCA_breast_DESeq2)$shortLetterCode == "TP")
+     RNA_order[, col] <-  counts(BRCA_breast_DESeq2, normalized = TRUE)[, k[1]] 
+     
+}
+for (col in 3:4) {
+     k = which(colData(BRCA_breast_DESeq2)$paper_patient == TCGA_ATAC_BRCA$submitter_id[col] & colData(BRCA_breast_DESeq2)$shortLetterCode == "TP")
+     RNA_order[, col] <-  counts(BRCA_breast_DESeq2, normalized = TRUE)[, k[3]] 
+     
+ }
+
+RNA_order[1:5, 1:10]
+```
+
+Extraire les basales
+```{r}
+id_basal <- which(TCGA_ATAC_BRCA$BRCA_pam50 == "Basal")
+
+BRCA_log2norm_Basal <- BRCA_log2norm[,id][, id_basal]
+
+BRCA_log2norm_Basal[1:5, 1:5]
+```
+```{r}
+RNA_order_basal <- RNA_order[,id_basal]
+anno_TCGA_ATAC_Basal <- TCGA_ATAC_BRCA[id_basal,]
+
+as.character(anno_TCGA_ATAC_Basal$Library_Name) == substring(colnames(BRCA_log2norm_Basal), 1, 61)
+colnames(RNA_order_basal) <- anno_TCGA_ATAC_Basal$Library_Name
+
+RNA_order_basal[1:5, 1:5]
+```
+
+```{r}
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+Gene_int = "HORMAD1"
+
+ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+k <- which(rownames(BRCA_breast_DESeq2) ==  ENS_Hormad$ENSEMBL )
+
+XP_Hormad <- RNA_order_basal[k,]
+XP_Hormad[which(is.na(t(XP_Hormad))==TRUE)] <- 0
+
+
+plot(sort(t(XP_Hormad)))
+```
+```{r}
+Gene_int = "CT83"
+
+ENS_HCT83 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
+                           "ENSEMBL", "SYMBOL")
+
+k <- which(rownames(BRCA_breast_DESeq2) ==  ENS_HCT83$ENSEMBL )
+
+XP_CT83 <- RNA_order_basal[k,]
+XP_CT83[which(is.na(t(XP_CT83))==TRUE)] <- 0
+
+plot(sort(t(XP_CT83)))
+```
+
+
+```{r}
+                    
+cor_hormad <- apply(X = BRCA_log2norm_Basal[,], 
+                    MARGIN = 1, 
+                    FUN = function(coucou){cor(coucou ,y = log2(1+t(XP_Hormad)), method = "pearson")})
+
+cor_ct<- apply(X = BRCA_log2norm_Basal[,], 
+                    MARGIN = 1, 
+                    FUN = function(coucou){cor(coucou ,y = log2(1+t(XP_CT83)), method = "pearson")})
+
+```
+
+
+```{r}
+hist(cor_hormad)
+```
+
+```{r}
+head(sort((cor_hormad), decreasing = T))
+
+
+h_signif <- which(abs(cor_hormad) > 0.75)
+```
+
+
+```{r}
+BRCA_log2norm[,1:7][h_signif,]
+```
+
+```{r}
+plot(t(BRCA_log2norm_Basal[h_signif[4],]), t(XP_Hormad))
+```
+
+
+track name=Hormad1_Pic_Cor description="pics" useScore=1
+```{r}
+h_signif <- which(abs(cor_hormad) > 0.6)
+
+table_h <- data.frame(BRCA_log2norm[,1:4][h_signif,],
+                  score = cor_hormad[h_signif]*1000)
+
+write.table(table_h, "table_h.bed", row.names = F, col.names = F, quote = F, sep = "\t")
+
+head(table_h,40)
+```
+```{r}
+ct_signif <- which(abs(cor_ct) > 0.6)
+
+table_ct <- data.frame(BRCA_log2norm[ ,1:4][ct_signif,],
+                  score = cor_ct[ct_signif]*1000)
+
+write.table(table_ct, "table_ct.bed", row.names = F, col.names = F, quote = F, sep = "\t")
+
+```
+# Ana Diff
+## Orga
+```{r}
+BRCA_raw_counts <- read.delim("~/Desktop/210622_TCGA_ATAC/TCGA-ATAC_Cancer_Type-specific_Count_Matrices_raw_counts/BRCA_raw_counts.txt")
+```
+
+
+
+```{r}
+id <- 6:ncol(BRCA_raw_counts)
+
+BRCA_raw_counts[, id] <- BRCA_raw_counts[, id][order(colnames(BRCA_raw_counts[, id]))]
+
+
+# Basal-like only
+id_basal <- which(TCGA_ATAC_BRCA$BRCA_pam50 == "Basal")
+
+BRCA_raw_counts_Basal <- BRCA_raw_counts[,id][, id_basal]
+
+```
+
+Same order ?
+
+```{r}
+ substr(colnames(BRCA_raw_counts)[id], 1, 61) == TCGA_ATAC_BRCA$Library_Name
+```
+```{r}
+substr(Factor_H_CT_sub$patient, 1,12 ) == TCGA_ATAC_BRCA$submitter_id
+```
+
+## Total access
+
+```{r}
+Factor_H_CT_ATAC_basal <- Factor_H_CT_sub[id_basal,]
+
+Totalacc <- apply(BRCA_raw_counts_Basal, 2, sum)
+
+data_acc <- data.frame(acc = Totalacc, Type = Factor_H_CT_ATAC_basal$factor)
+
+ggplot(data_acc,
+       aes(x = Type, y = acc, fill = Type))+
+  geom_boxplot()+
+  geom_point(size = 3, shape = 1, aes(color = Type)) +
+  
+  labs(title="Accessibility", y="Adjusted P-value (-log10)",x="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # th?me blanc
+  theme(plot.title = element_text(size = 10,hjust=0.5),    #titre en gras, centr?
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+
+```
+
+```{r}
+summary(aov(data_acc$acc~data_acc$Type))
+```
+
+
+
+```{r}
+data_acc <- data.frame(acc = Totalacc, Type = Factor_H_CT_ATAC_basal$factor)
+
+ggplot(subset(data_acc, Type %in% c("ON", "OFF")),
+       aes(x = Type, y = acc, fill = Type))+
+  geom_boxplot()+
+  geom_point(size = 3, shape = 1, aes(color = Type)) +
+   
+  scale_color_manual(values = c("orange4", "blue4"))+
+  scale_fill_manual(values = c("orange", "blue3"))+
+  
+  labs(title="Accessibility", y="Adjusted P-value (-log10)",x="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # th?me blanc
+  theme(plot.title = element_text(size = 10,hjust=0.5),    #titre en gras, centr?
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+
+t.test(subset(data_acc, Type %in% c("ON", "OFF"))$acc ~subset(data_acc, Type %in% c("ON", "OFF"))$Type)
+```
+
+##DESeq2
+
+```{r}
+library(DESeq2)
+
+cts <- as.matrix(BRCA_raw_counts_Basal)
+coldata <- data.frame(Factor_H_CT = Factor_H_CT_ATAC_basal$factor)
+
+
+id <- 6:ncol(BRCA_raw_counts)
+rowdata <- BRCA_raw_counts[, -id]
+
+se <- SummarizedExperiment(assays = cts,
+                           colData = coldata)
+
+
+dds <- DESeqDataSet(se[, ],
+             design= ~ Factor_H_CT )
+
+
+dds <- DESeq(dds)
+resultsNames(dds) # lists the coefficients
+
+```
+
+
+```{r}
+# Principal Component Analysis (PCA) plot
+res.vst <- vst(dds)
+
+
+plotPCA(res.vst, intgroup="Factor_H_CT")
+
+```
+```{r}
+res.DESeq2_both_ON_vs_Both_OFF <- results(dds,
+                      contrast=c("Factor_H_CT","ON","OFF"), alpha=0.05, pAdjustMethod="BH")
+
+
+head(cbind(rowdata, res.DESeq2_both_ON_vs_Both_OFF))
+```
+
+
+```{r}
+signif <- which(res.DESeq2_both_ON_vs_Both_OFF$padj <  0.01 & 
+                  abs(res.DESeq2_both_ON_vs_Both_OFF$log2FoldChange) > 2)
+
+table_ON_OFF <- data.frame(rowdata[signif,1:4],
+                  score = res.DESeq2_both_ON_vs_Both_OFF$log2FoldChange[signif])
+
+write.table(table_ON_OFF, "table_DEA_bothON_bothOFF.bed", row.names = F, col.names = F, quote = F, sep = "\t")
+
+tail(table_ON_OFF)
+```
+### MAplot
+
+```{r}
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+
+
+A = "CT83 & HORMAD1 ON  vs OFF"
+# Too many points
+id_sample <- sample(1:nrow(data), 1*10^4, replace=FALSE)
+
+data = data.frame(rowdata[id_sample, 1:4], res.DESeq2_both_ON_vs_Both_OFF[id_sample,])
+
+
+id_HORMAD = which(is.element(data$symbol ,c("HORMAD1"))==TRUE)
+
+int_diff_neg = which(data$padj < 0.01
+                                    & data$log2FoldChange < -1.5)
+int_diff_pos = which(data$padj < 0.01 & 
+                                data$log2FoldChange > 1.5)
+#win.metafile(paste(pathRes, "/MAplotPIWIL.wmf", sep = ""))
+
+
+g1 = ggplot(data,
+       aes(y = -log10(padj), x = log2FoldChange))+
+  geom_point(data = data[-c(int_diff_neg, int_diff_pos),], shape = 1, color ="black")+
+  geom_point(data = data[int_diff_neg,], shape = 1, color ="red4")+
+  geom_point(data = data[int_diff_pos,], shape = 1, color ="blue4")+
+
+  scale_x_continuous(limits = c(-6,6))+
+
+  labs(title=A, y="Adjusted P-value (-log10)",x="Log2 Fold-Change")+                         
+  theme_classic()+                                                     # th?me blanc
+  theme(plot.title = element_text(size = 10,hjust=0.5),    #titre en gras, centr?
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+g1
+```
+
+
+
+```{r}
+g1 = ggplot(data,
+       aes(y = log2FoldChange, x = baseMean))+
+  geom_point(data = data[,], aes(colour = -padj))+
+
+  scale_y_continuous(limits = c(-6,6))+
+
+  labs(title=A, y="Log2 FC",x="BaseMean")+                         
+  theme_classic()+                                                     # th?me blanc
+  theme(plot.title = element_text(size = 10,hjust=0.5),    #titre en gras, centr?
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),        #titre des axes en gras
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "none")
+g1
+```
+
+
+
+
+
+## Annotations
+
+```{r}
+library(GenomicRanges)
+
+coucou_off <- which(Factor_H_CT_ATAC_basal$factor == "OFF")
+
+ex_OFF <- GRanges(
+    seqnames = Rle(rowdata$seqnames),
+    ranges = IRanges(rowdata$start, end = rowdata$end, names =rowdata$name),
+    score = round(apply(BRCA_raw_counts_Basal[, coucou_off], 1, mean, na.rm=T)))
+genome(ex_OFF) <- 'hg38'
+ex_OFF
+```
+```{r}
+coucou_on <- which(Factor_H_CT_ATAC_basal$factor == "ON")
+
+ex_ON <- GRanges(
+    seqnames = Rle(rowdata$seqnames),
+    ranges = IRanges(rowdata$start, end = rowdata$end, names =rowdata$name),
+    score = round(apply(BRCA_raw_counts_Basal[, coucou_on], 1, mean, na.rm=T)))
+genome(ex_ON) <- 'hg38'
+ex_ON
+```
+
+
+```{r}
+library(GenomicRanges)
+
+gr <- GRanges(
+    seqnames = Rle(table_ON_OFF$seqnames),
+    ranges = IRanges(table_ON_OFF$start, end = table_ON_OFF$end, names =table_ON_OFF$name),
+    score = table_ON_OFF$score)
+genome(gr) <- 'hg38'
+gr
+```
+
+## ChIPseeker
+```{r}
+signif <- which(res.DESeq2_both_ON_vs_Both_OFF$padj <  0.01 )
+
+table_ON_OFF <- data.frame(rowdata[signif,1:4],
+                  score = res.DESeq2_both_ON_vs_Both_OFF$log2FoldChange[signif])
+gr <- GRanges(
+    seqnames = Rle(table_ON_OFF$seqnames),
+    ranges = IRanges(table_ON_OFF$start, end = table_ON_OFF$end, names =table_ON_OFF$name),
+    score = table_ON_OFF$score)
+
+
+table_all <- data.frame(rowdata[,1:4],
+                  score = res.DESeq2_both_ON_vs_Both_OFF$log2FoldChange)
+gr_all <- GRanges(
+    seqnames = Rle(table_all$seqnames),
+    ranges = IRanges(table_all$start, end = table_all$end, names =table_all$name),
+    score = table_all$score)
+```
+
+```{r}
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+MacsCalls_chr20_filteredAnno <- annotatePeak(gr, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene)
+pic_up <- annotatePeak(subset(gr, score >0), TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene)
+pic_dw <- annotatePeak(subset(gr, score <0), TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+
+picAnno <- annotatePeak(gr_all, TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+par(mfrow=c(1,2)) 
+plotAnnoPie(MacsCalls_chr20_filteredAnno)
+plotAnnoPie(picAnno)
+
+```
+https://rockefelleruniversity.github.io/RU_ATAC_Workshop.html#greenleaf-dataset---annotating-open-regions.
+
+```{r}
+par(mfrow=c(1,2)) 
+
+plotAnnoPie(pic_up)
+plotAnnoPie(pic_dw)
+
+
+vennpie(pic_up)
+
+vennpie(pic_dw)
+```
+```{r}
+tagMatrixList <- lapply(c(list(subset(gr, score >0)), 
+                                 list(subset(gr, score < 0))), getTagMatrix, windows=promoter)
+
+```
+```{r}
+tagHeatmap(tagMatrixList, xlim=c(-3000, 3000), color=NULL)
+```
+
+```{r}
+plotAvgProf(tagMatrixList, xlim=c(-3000, 3000))
+```
+
+
+```{r}
+plotDistToTSS(MacsCalls_chr20_filteredAnno,
+              title="Distribution of transcription factor-binding loci\nrelative to TSS")
+```
+
+
+```{r}
+covplot(gr, weightCol="score")
+```
+## library(EnrichedHeatmap)
+
+```{r}
+library(EnrichedHeatmap)
+```
+```{r}
+tss = promoters(gr, upstream = 200, downstream = 200)
+tss[1:5]
+```
+
+
+
+
+```{r}
+mat = normalizeToMatrix(gr, tss, value_column = "score", 
+    extend = 3000, mean_mode = "w0", w = 50)
+mat
+```
+
+```{r}
+EnrichedHeatmap(mat, row_km = 2, name = "ATAC",
+                    top_annotation = HeatmapAnnotation(
+        enrich = anno_enriched(gp = gpar(neg_col = "darkblue", pos_col = "darkred"),
+            axis_param = list(side = "left")))
+)
+```
+```{r}
+require(EnrichedHeatmap)
+require(rtracklayer)
+require(circlize)
+require(data.table)
+
+
+
+targets <- subset(gr, score > 0)
+
+
+#/ We take the center of each region/peak and want to extend by 5kb each direction:
+ExtendSize <- 5000
+targets.extended  <- resize(targets, fix = "center", width = ExtendSize*2)
+
+#/ We load the relevant parts of the bigwig file into R. 
+#/ This is more efficient than reading the entire file. 
+BigWig1 <- ex_OFF
+BigWig2 <- ex_ON
+
+#/ Create the normalizedMatrix that EnrichedHeatmap accepts as input.
+#/ We use the targets center (width=1) because from what I understand normalizeMatrix
+#/ does not allow to turn off its "extend" option. Therefore we trick it by simply
+#/ providing the peak centers and then let the function extend it by our predefined window size.
+normMatrix1 <- normalizeToMatrix(signal = BigWig1, 
+                                target = resize(targets, fix = "center", width = 1), 
+                                background = 0, 
+                                keep = c(0, 0.99),      #/ minimal value to the 99th percentile
+                                target_ratio = 0,
+                                mean_mode = "w0",       #/ see ?EnrichedHeatmap on other options
+                                value_column = "score", #/ = the name of the 4th column of the bigwig
+                                extend = ExtendSize)
+
+
+normMatrix2 <- normalizeToMatrix(signal = BigWig2, 
+                                target = resize(targets, fix = "center", width = 1), 
+                                background = 0, 
+                                keep = c(0, 0.99),      #/ minimal value to the 99th percentile
+                                target_ratio = 0,
+                                mean_mode = "w0",       #/ see ?EnrichedHeatmap on other options
+                                value_column = "score", #/ = the name of the 4th column of the bigwig
+                                extend = ExtendSize)
+
+
+#/ Make a color gradient that covers the range of normMatrix from 0 to the 99th percentile.
+#/ The percentile avoids outliers to skew the heatmap:
+col_fun = circlize::colorRamp2(quantile(normMatrix, c(0, .99)), c("darkblue", "darkgoldenrod1"))
+
+#/ heatmap function:
+EH1 <- EnrichedHeatmap( mat = normMatrix1, 
+                       pos_line = FALSE, #/ no dashed lines around the start
+                       border = FALSE,   #/ no box around heatmap
+                       col = col_fun,    #/ color gradients from above
+                       column_title = "Nice Heatmap", #/ column title 
+                       column_title_gp = gpar(fontsize = 15, fontfamily = "sans"),
+                       use_raster = TRUE, raster_quality = 10, raster_device = "png",
+                       #/ turn off background colors
+                       rect_gp = gpar(col = "transparent"), 
+                       #/ legend options:
+                       heatmap_legend_param = list(
+                         legend_direction = "horizontal",
+                         title = "normalized counts"),
+                       #/ options for the profile plot on top of the heatmap:
+                       top_annotation = HeatmapAnnotation(
+                         enriched = anno_enriched(
+                           gp = gpar(col = "black", lty = 1, lwd=2),
+                           col="black")
+                       )
+                       
+                       
+) #/ end of EnrichedHeatmap function
+EH2 <- EnrichedHeatmap( mat = normMatrix2, 
+                       pos_line = FALSE, #/ no dashed lines around the start
+                       border = FALSE,   #/ no box around heatmap
+                       col = col_fun,    #/ color gradients from above
+                       column_title = "Nice Heatmap", #/ column title 
+                       column_title_gp = gpar(fontsize = 15, fontfamily = "sans"),
+                       use_raster = TRUE, raster_quality = 10, raster_device = "png",
+                       #/ turn off background colors
+                       rect_gp = gpar(col = "transparent"), 
+                       #/ legend options:
+                       heatmap_legend_param = list(
+                         legend_direction = "horizontal",
+                         title = "normalized counts"),
+                       #/ options for the profile plot on top of the heatmap:
+                       top_annotation = HeatmapAnnotation(
+                         enriched = anno_enriched(
+                           gp = gpar(col = "black", lty = 1, lwd=2),
+                           col="black")
+                       )
+                       
+                       
+) #/ end of EnrichedHeatmap function
+
+ht_list <- EH1 + EH2
+
+#/ Save as pdf to disk:
+pdf("EnrichedHeatmap_pos.pdf")
+
+draw(ht_list,                                #/ plot the heatmap from above 
+     heatmap_legend_side = "bottom",     #/ we want the legend below the heatmap
+     annotation_legend_side = "bottom",  #/ legend on the bottom side
+     padding = unit(c(4, 4, 4, 4), "mm") #/ some padding to avoid labels beyond plot borders
+)
+
+dev.off()
+```
+
+## TagMatrix
+```{r}
+promoter <- getPromoters(TxDb=TxDb.Hsapiens.UCSC.hg38.knownGene, 
+                         upstream=30000, downstream=30000)
+tagMatrix <- getTagMatrix(gr, windows=promoter)
+
+```
+```{r}
+plotAvgProf2(gr_all, 
+             TxDb= TxDb.Hsapiens.UCSC.hg38.knownGene, 
+             upstream=3000, downstream=3000,
+             xlab="Genomic Region (5'->3')", ylab = "Read Count Frequency")
+```
+
+
+```{r}
+plotAvgProf2(gr, 
+             TxDb= TxDb.Hsapiens.UCSC.hg38.knownGene, 
+             upstream=3000, downstream=3000,
+             xlab="Genomic Region (5'->3')", ylab = "Read Count Frequency")
+```
+
+```{r}
+plotAvgProf2(gr, 
+             TxDb= TxDb.Hsapiens.UCSC.hg38.knownGene, 
+             upstream=10000, downstream=10000,
+             xlab="Genomic Region (5'->3')", ylab = "Normalized Read Count Frequency (DAR)")
+```
+
+
+```{r}
+plotAvgProf2(gr_all, 
+             TxDb= TxDb.Hsapiens.UCSC.hg38.knownGene, 
+             upstream=10000, downstream=10000,
+             xlab="Genomic Region (5'->3')", ylab = "Read Count Frequency")
+```
+
+
+
+
+## DEA en detail
+```{r}
+upRegions <- subset(gr, score >0)
+downRegions <- subset(gr, score < 0)
+upRegions
+```
+```{r}
+upRegions <- resize(upRegions, fix = "center", width = 100)
+downRegions <- resize(downRegions, fix = "center", width = 100)
+```
+
+We can now use the getSeq function as previously to extract the signal from around within the GRange regions and write to a FASTA file for use in Meme-ChIP using the writeXStringSet function.
+```{r}
+library(BSgenome.Hsapiens.UCSC.hg38)
+upStrings <- getSeq(BSgenome.Hsapiens.UCSC.hg38, upRegions)
+downStrings <- getSeq(BSgenome.Hsapiens.UCSC.hg38, downRegions)
+names(upStrings) <- as.character(upRegions)
+names(downStrings) <- as.character(downRegions)
+writeXStringSet(upStrings, file = "UpRegions.fa")
+writeXStringSet(downStrings, file = "DownStrings.fa")
+```
+
+
+```{r}
+library(universalmotif)
+```
+
+
+
+##GO
+```{r}
+res_anno <- as.data.frame(MacsCalls_chr20_filteredAnno)
+
+library(clusterProfiler)
+
+
+go <- enrichGO(res_anno$geneId, OrgDb = "org.Hs.eg.db", ont = "BP", maxGSSize = 5000)
+
+
+go[1:20, 1:6]
+```
+
+```{r}
+go_up <- enrichGO(subset(res_anno, score > 0)$geneId, OrgDb = "org.Hs.eg.db", ont = "BP", maxGSSize = 5000)
+
+go_dw <- enrichGO(subset(res_anno, score < 0)$geneId, OrgDb = "org.Hs.eg.db", ont = "BP", maxGSSize = 5000)
+
+go_up[1:20, 1:6]
+
+```
+
+```{r}
+go_dw[1:20, 1:6]
+
+```
+
+## GSEA
+###H
+```{r}
+library(clusterProfiler)
+library(msigdbr)
+
+m_t2g <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, entrez_gene)
+head(m_t2g)
+
+data = res_anno
+
+gene_list = data$score
+names(gene_list) = data$geneId
+gene_list = sort(gene_list, decreasing = T)
+gene_list = gene_list[-which(duplicated(names(gene_list))==TRUE)]
+
+length(gene_list)
+
+egmt2 <-GSEA(gene_list, 
+            TERM2GENE = m_t2g, 
+            pvalueCutoff = 0.25,
+            by = "fgsea")
+dotplot(egmt2, showCategory = 20, font.size = 10, split = ".sign") + facet_grid(.~.sign)
+```
+```{r}
+data_barplot <- subset(data.frame(egmt2), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:10,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+    scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+  labs(title="GSEA Hallmarks", y="-log10(padj)",x=" ",cex=10)+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text(colour="black"),
+       legend.position = "right")
+```
+###C2
+```{r}
+m_c2 <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::select(gs_name, entrez_gene)
+head(m_c2)
+
+
+# compar
+emC2 <- GSEA(gene_list, 
+            TERM2GENE = m_c2, 
+            pvalueCutoff = 0.25)
+head(emC2)
+
+dotplot(emC2, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+data_barplot <- subset(data.frame(emC2), p.adjust < 0.09)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:10,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA C2 Curated", y="-log10(padj)",x=" ",cex=10)+
+    scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 3),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text( colour="black"),
+       legend.position = "right")
+```
+
+```{r}
+m_c6 <- msigdbr(species = "Homo sapiens", category = "C6") %>% 
+  dplyr::select(gs_name, entrez_gene)
+head(m_c6)
+library(fgsea)
+
+
+C5_GO_gene_sets = msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>% 
+  dplyr::select(gs_name, entrez_gene)
+
+# compar
+emGO <- GSEA(gene_list, 
+            TERM2GENE = C5_GO_gene_sets, 
+            pvalueCutoff = 0.25)
+
+dotplot(emGO, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+
+data_barplot <- subset(data.frame(emGO), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:20,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA GO", y="-log10(padj)",x=" ",cex=10)+
+    scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text( colour="black"),
+       legend.position = "right")
+```
+
+
+```{r}
+
+
+C2_KEGG_gene_sets = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:KEGG") %>%
+  dplyr::select(gs_name, entrez_gene)
+
+# compar
+emKEGG <- GSEA(gene_list, 
+            TERM2GENE = C2_KEGG_gene_sets, 
+            pvalueCutoff = 0.25)
+
+dotplot(emKEGG, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+
+
+data_barplot <- subset(data.frame(emKEGG), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:20,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA KEGG", y="-log10(padj)",x=" ",cex=10)+
+  theme_bw()+ 
+  scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text(size = 10, colour="black"),
+       legend.position = "right")
+```
+```{r}
+C2_gene_sets = msigdbr(species = "Homo sapiens", category = "C2")
+
+Breast_Curated <- C2_gene_sets[grep("BREAST",C2_gene_sets$gs_name),] %>%
+  dplyr::select(gs_name, entrez_gene)
+
+emBREAST <- GSEA(gene_list, 
+            TERM2GENE = Breast_Curated, 
+            pvalueCutoff = 0.25)
+
+dotplot(emBREAST, showCategory = 20, font.size = 6, split = ".sign") + facet_grid(.~.sign)
+
+
+data_barplot <- subset(data.frame(emBREAST), p.adjust < 0.25)[,c("ID", "NES", "p.adjust")]
+data_barplot <- data_barplot[order(data_barplot$p.adjust),]
+data_barplot$ID <- factor(data_barplot$ID, levels = rev(data_barplot$ID))
+
+ggplot(data=data_barplot[1:20,], 
+       aes(y = -log10(p.adjust), x = ID, fill = NES)) +
+  geom_bar(stat="identity", color = "black")+
+  coord_flip()+
+  labs(title="GSEA Breast", y="-log10(padj)",x=" ",cex=10)+
+  theme_bw()+ 
+  scale_fill_continuous(type = "viridis", limits=c(-3, 3))+
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text(size = 6, colour="black"),
+       legend.position = "right")
+```
+
+
+
+
+
+
+
+# Finding Motif
+https://rockefelleruniversity.github.io/RU_ATACseq/presentations/slides/RU_ATAC_part3.html#29
+
+To interact with JASPAR package we will make use of the TFBSTools package from the same lab.
+
+Whereas the JASPAR package holds the information on Motifs and Position Probability Matrices (PPMs), TFBSTools has the functionality to manipulate and interact with these tools.
+
+Three useful functions available from TFBStools to interact with the JASPAR databases are the getMatrixSet, getMatrixByID and getMatrixByID
+
+First we can retrieve a sensible set of motifs to scan for within our mouse tissue ATACseq data.
+
+Here we retrieve the vertebrate, JASPAR CORE motifs. We additional specify all_versions is FALSE to only include the latest version of a motif.
+
+```{r}
+library(MotifDb)
+library(Biostrings)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(TFBSTools)
+library(JASPAR2018)
+
+opts <- list()
+opts[["tax_group"]] <- "vertebrates"
+opts[["collection"]] <- "CORE"
+opts[["all_versions"]] <- FALSE
+motifsToScan <- getMatrixSet(JASPAR2018, opts)
+```
+
+
+
+```{r}
+peakRangesCentered <- resize(gr, fix = "center", width = 100)
+peakSeqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, peakRangesCentered)
+names(peakSeqs) <- as.character(peakRangesCentered)
+peakSeqs
+
+```
+
+
+```{r}
+library(motifmatchr)
+
+motif_positions <- matchMotifs(motifsToScan, peakSeqs, out = "positions")
+class(motif_positions)
+```
+
+```{r}
+motifHits <- matchMotifs(motifsToScan, peakSeqs, out = "matches")
+class(motifHits)
+```
+
+```{r}
+mmMatrix <- motifMatches(motifHits)
+dim(mmMatrix)
+```
+
+```{r}
+totalMotifOccurence <- apply(mmMatrix, 2, sum, na.omit = TRUE)
+sort(totalMotifOccurence, decreasing = T)[1:4]
+```
+
+
+
+```{r}
+upRegions <- gr[gr$score > 0]
+downRegions <- gr[gr$score < 0, ]
+upRegions
+```
+```{r}
+
+```
+
+
+
+
+
+
+```{r}
+library(chromVAR)
+
+myCounts <- se[rowSums(assay(se)) > 5, ]
+myCounts <- addGCBias(myCounts, genome = BSgenome.Hsapiens.UCSC.hg38)
+
+motif_ix <- matchMotifs(motifsToScan, myCounts, genome = BSgenome.Hsapiens.UCSC.hg38)
+motif_ix
+
+deviations <- computeDeviations(object = myCounts, annotations = motif_ix)
+variability_Known <- computeVariability(deviations)
+
+devZscores <- deviationScores(deviations)
+devZscores[1:2, ]
+```
+
+
+
+# MEME
+
+```{r}
+library(universalmotif)
+UpStrings_FC15_MEME <- read.delim("~/Desktop/UpStrings_FC15_MEME.tsv")
+UpStrings_FC15Motif <- read_meme("~/Desktop/up.meme")
+
+DwStrings_FC15_MEME <- read.delim("~/Desktop/DownStrings_MEME_FC15.tsv")
+DwStrings_FC15Motifs <- read_meme("~/Desktop/dwn.meme")
+
+```
+
+
+
+```{r}
+Total_dw = length(which(res.DESeq2_both_ON_vs_Both_OFF$padj <  0.01 & 
+                  res.DESeq2_both_ON_vs_Both_OFF$log2FoldChange < 1.5))
+
+g1 <- ggplot(data = DwStrings_FC15_MEME,
+       aes(x = -log10(E.VALUE), y = SITES/Total_dw * 100, label = MOTIF_ID) )+
+  geom_point(shape = 1, size = 3)+
+  labs(title="Down MEME", y="-log10(padj)",x="% in lost peaks ",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text( colour="black"),
+       legend.position = "right")
+
+g1
+
+```
+```{r}
+ggplotly(g1)
+```
+
+
+```{r}
+view_motifs(DwStrings_FC15Motifs[[1]])
+```
+
+
+
+```{r}
+Total_up = length(which(res.DESeq2_both_ON_vs_Both_OFF$padj <  0.01 & 
+                  res.DESeq2_both_ON_vs_Both_OFF$log2FoldChange > 1.5))
+
+
+g1 <- ggplot(data = UpStrings_FC15_MEME,
+       aes(x = -log10(E.VALUE), y = SITES/Total_up * 100, label = MOTIF_ID))+
+  geom_point(shape = 1, size = 3)+
+  labs(title="Up MEME", y="-log10(padj)",x="% in lost peaks ",cex=10)+
+  theme_classic()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(size = 11),
+              axis.text.x=element_text( angle=45, hjust=1,colour="black"),
+              axis.text.y=element_text( colour="black"),
+       legend.position = "right")
+
+g1
+```
+```{r}
+ggplotly(g1)
+
+```
+
+```{r}
+view_motifs(UpStrings_FC15Motif[1])
+
+```
+
+
+
+
+# GRANGES CpG
+
+```{r}
+library(annotatr)
+
+builtin_annotations()[grep("hg38", builtin_annotations())]
+
+```
+
+## Up
+```{r}
+code = c('lncrna' = 'AH49559')
+build_ah_annots(genome = 'hg38', ah_codes = code, annotation_class = 'custom')
+print(annotatr_cache$list_env())
+
+annots = c('hg38_cpgs', 'hg38_basicgenes', 'hg38_enhancers_fantom', 'hg38_custom_lncrna')
+```
+
+
+```{r}
+
+annots = c('hg38_custom_lncrna')
+
+# Build the annotations (a single GRanges object)
+annotations = build_annotations(genome = 'hg38', annotations = annots)
+
+# Intersect the regions we read in with the annotations
+pic_up_annotated = annotate_regions(
+    regions = subset(gr, score >0),
+    annotations = annotations,
+    ignore.strand = TRUE,
+    quiet = FALSE)
+# A GRanges object is returned
+print(pic_up_annotated)
+```
+
+```{r}
+# Randomize the input regions
+pic_up_random_regions = randomize_regions(
+    regions = subset(gr, score >0),
+    allow.overlaps = TRUE,
+    per.chromosome = TRUE)
+
+# Annotate the random regions using the same annotations as above
+# These will be used in later functions
+pic_up_random_annotated = annotate_regions(
+    regions = pic_up_random_regions,
+    annotations = annotations,
+    ignore.strand = TRUE,
+    quiet = TRUE)
+```
+```{r}
+# Find the number of regions per annotation type
+pic_up_annsum = summarize_annotations(
+    annotated_regions = pic_up_annotated,
+    quiet = TRUE)
+print(pic_up_annsum)
+```
+```{r}
+# Find the number of regions per annotation type
+# and the number of random regions per annotation type
+pic_up_annsum_rnd = summarize_annotations(
+    annotated_regions = pic_up_annotated,
+    annotated_random = pic_up_random_annotated,
+    quiet = TRUE)
+print(pic_up_annsum_rnd)
+```
+```{r}
+# Take the mean of the diff_meth column across all regions
+# occurring in an annotation.
+pic_up_numsum = summarize_numerical(
+    annotated_regions = pic_up_annotated,
+    by = c('annot.type', 'annot.id'),
+    over = c('score'),
+    quiet = TRUE)
+print(pic_up_numsum)
+```
+
+```{r}
+# Count the occurrences of classifications in the DM_status
+# column across the annotation types.
+pic_up_catsum = summarize_categorical(
+    annotated_regions = pic_up_annotated,
+    by = c('annot.type'),
+    quiet = TRUE)
+print(pic_up_catsum)
+```
+```{r}
+# View the number of regions per annotation and include the annotation
+# of randomized regions
+pic_up_vs_kg_annotations_wrandom = plot_annotation(
+    annotated_regions = pic_up_annotated,
+    annotated_random = pic_up_random_annotated,
+   # annotation_order = annots_order,
+    plot_title = 'Dist. of Sites Tested for ATAC (with rndm.)',
+    x_label = 'Annotations',
+    y_label = 'Count')
+print(pic_up_vs_kg_annotations_wrandom)
+```
+
+## Dw
+```{r}
+
+# Intersect the regions we read in with the annotations
+pic_dw_annotated = annotate_regions(
+    regions = subset(gr, score <0),
+    annotations = annotations,
+    ignore.strand = TRUE,
+    quiet = FALSE)
+
+pic_all_annotated = annotate_regions(
+    regions = gr_all,
+    annotations = annotations,
+    ignore.strand = TRUE,
+    quiet = FALSE)
+
+# Randomize the input regions
+pic_dw_random_regions = randomize_regions(
+    regions = subset(gr, score <0),
+    allow.overlaps = TRUE,
+    per.chromosome = TRUE)
+
+# Annotate the random regions using the same annotations as above
+# These will be used in later functions
+pic_dw_random_annotated = annotate_regions(
+    regions = pic_dw_random_regions,
+    annotations = annotations,
+    ignore.strand = TRUE,
+    quiet = TRUE)
+```
+```{r}
+# Find the number of regions per annotation type
+pic_dw_annsum = summarize_annotations(
+    annotated_regions = pic_dw_annotated,
+    quiet = TRUE)
+
+pic_all_annsum = summarize_annotations(
+    annotated_regions = pic_all_annotated,
+    quiet = TRUE)
+
+print(pic_dw_annsum)
+```
+```{r}
+# Find the number of regions per annotation type
+# and the number of random regions per annotation type
+pic_dw_annsum_rnd = summarize_annotations(
+    annotated_regions = pic_dw_annotated,
+    annotated_random = pic_dw_random_annotated,
+    quiet = TRUE)
+print(pic_dw_annsum_rnd)
+```
+
+
+```{r}
+# View the number of regions per annotation and include the annotation
+# of randomized regions
+annots_order = c(
+    'hg38_cpg_islands',
+    'hg38_cpg_shelves',
+    'hg38_cpg_shores',
+    'hg38_cpg_inter',
+    'hg38_custom_lncrna',    
+    'hg38_enhancers_fantom',  
+    'hg38_genes_1to5kb' ,  
+    'hg38_genes_3UTRs',   
+    'hg38_genes_5UTRs' ,
+    'hg38_genes_exons' , 
+    'hg38_genes_introns' ,   
+    'hg38_genes_promoters' )
+pic_dw_vs_kg_annotations_wrandom = plot_annotation(
+    annotated_regions = pic_dw_annotated  ,
+    annotated_random = pic_dw_random_annotated,
+    annotation_order = annots_order,
+    plot_title = 'Dist. of Sites Tested for ATAC (with rndm.)',
+    x_label = 'Annotations',
+    y_label = 'Count')
+print(pic_dw_vs_kg_annotations_wrandom)
+```
+```{r}
+pic_up_vs_kg_annotations_wrandom = plot_annotation(
+    annotated_regions = pic_up_annotated  ,
+    annotated_random = pic_up_random_annotated,
+    annotation_order = annots_order,
+    plot_title = 'Dist. of Sites Tested for ATAC (with rndm.)',
+    x_label = 'Annotations',
+    y_label = 'Count')
+print(pic_up_vs_kg_annotations_wrandom)
+```
+```{r}
+coucou <- data.frame(annot.type = data.frame(pic_up_annsum)$annot.type,
+                     all = data.frame(pic_all_annsum)$n /sum(data.frame(pic_all_annsum)$n) *100,
+                     dw =  data.frame(pic_dw_annsum)$n / sum( data.frame(pic_dw_annsum)$n) *100,
+                     up = data.frame(pic_up_annsum)$n /sum(data.frame(pic_up_annsum)$n)*100)
+
+coucou <- data.frame(annot.type = data.frame(pic_up_annsum)$annot.type,
+                     all = data.frame(pic_all_annsum)$n /215920 *100,
+                     dw =  data.frame(pic_dw_annsum)$n / 7453 *100,
+                     up = data.frame(pic_up_annsum)$n /2780*100)
+
+
+
+coucou
+```
+##barplot
+
+```{r}
+data_barplot <- data.frame(annot = rep(coucou$annot.type, 3),
+                           type = rep(c("all", "dw", "up"), 
+                                      each = length(coucou$annot.type)),
+                           values = c(coucou$all, coucou$dw, coucou$up) ) 
+
+
+gg <- ggplot2::ggplot(data=data_barplot, 
+       aes(y = values, x =annot, fill = type)) +
+  geom_bar(stat="identity", position = "dodge", color = "black")+
+  scale_fill_manual(values = c("grey", "blue4", "red4"))+
+  labs(title="ATAC", y="%",x=" ",cex=10)+
+  theme_bw()+ 
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+
+gg
+```
+
+
+
+
+
+
+
+
+
+
+
+

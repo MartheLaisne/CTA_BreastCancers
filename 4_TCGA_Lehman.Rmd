@@ -106,12 +106,18 @@ data$lehman <- ClassifLehmannTCGA_order$TNBCtype[id_basal]
 data$lehman4 <- ClassifLehmannTCGA_order$TNBCtype_4[id_basal]
 
 
-ggplot(data = data, aes(x = (HORMAD1), y = (CT83), shape = type, color = lehman  ))+
-  geom_jitter(size = 3,  na.rm = T) + 
+id_int <- which(colData(BRCA_breast_FPKMUQ)$paper_patient[id_basal] %in%
+                  Factor_H_CT_ATAC_basal$patient)
+data$info <- rep("RNAonly", nrow(data))
+data$info[id_int] <- "RNA & ATAC"
+
+
+ggplot(data = data, aes(x = (1+ HORMAD1), y = (1+ CT83), shape = info, color = lehman  ))+
+  geom_jitter(size = 3,  na.rm = T, position=position_jitter(0.3)) + 
   geom_rug(outside = TRUE)+
   coord_cartesian(clip = "off")+
-  geom_hline(yintercept = (thr_ct))+
-  geom_vline(xintercept = (thr_h)) +
+  geom_hline(yintercept = (1+ thr_ct))+
+  geom_vline(xintercept = (1+ thr_h)) +
   
   scale_shape_manual(values = c(0:2, 5))+
   scale_x_continuous(trans = 'log10')+

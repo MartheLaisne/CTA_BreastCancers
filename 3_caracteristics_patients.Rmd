@@ -1,0 +1,1354 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+Factor_H_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/patient_breast_all.txt", header = T, sep = "\t")
+
+Factor_6_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/Factor_6_CT_patient_breast_all.txt", header = T, sep = "\t")
+
+coldata_brca_complete <- readRDS("~/Desktop/These_Marthe/1_Bioinfo/1_TCGA/190510_Breast_CaracterisationHormadCT83_RF/coldata_brca_complete.rds")
+head(Factor_H_CT)
+```
+
+```{r}
+id_her2 <- which(coldata_brca_complete$subtype_BRCA_Subtype_PAM50 == "Her2")
+
+
+id_basal <- which(coldata_brca_complete$subtype_BRCA_Subtype_PAM50 == "Basal")
+id_TN <- which(coldata_brca_complete$Diagno_patho == "TN")
+```
+
+
+```{r}
+info <- merge.data.frame(coldata_brca_complete, Factor_H_CT,
+                         by.x = "barcode", by.y = "patient",all.x = T )
+
+
+
+head(info)
+```
+
+
+## Stage
+
+```{r}
+id_her2 <- which(info$subtype_BRCA_Subtype_PAM50 == "Her2")
+
+
+id_basal <- which(info$subtype_BRCA_Subtype_PAM50 == "Basal")
+id_TN <- which(info$Diagno_patho == "TN")
+
+
+library(purrr)
+Stage <- info$tumor_stage
+Stage[which(Stage %in% c("stage i" ,     "stage ia"  ,   "stage ib"))] = "Stage I"
+Stage[which(Stage %in% c( "stage ii"  ,   "stage iia",    "stage iib" ))] = "Stage II"
+Stage[which(Stage %in% c("stage iii"  ,  "stage iiia" ,  "stage iiib" ,  "stage iiic" ))] = "Stage III"
+Stage[which(Stage %in% c( "stage iv"))] = "Stage IV"
+
+info$Stage <- Stage
+
+Stage_basal <- tapply(info$Stage[id_basal], info$factor[id_basal], table)
+Stage_basal
+
+for (i in 1:length(Stage_basal)) {
+  Stage_basal[[i]] <- Stage_basal[[i]] / sum(Stage_basal[[i]])*100
+}
+
+data <- Stage_basal %>% cbind(percent = flatten_dbl(.), 
+                      Stage= names(flatten_dbl(.)), 
+                      Type = rep(c( "Both_OFF", "CT83_ON", "Hormad_CT83_ON", "Hormad_ON" ), each = 6))
+
+data <- data.frame(Stage = unlist(data[, 3]),
+                   percent = unlist(data[, 2]),
+                   Type = unlist(data[, 4]))
+data
+```
+
+```{r}
+info_b <- info[id_basal,]
+
+data_chi <- data.frame(CTonly = c(tapply(info_b$Stage, info_b$factor, table) [[1]], 0, 0),
+                       Honly =c(0,  tapply(info_b$Stage, info_b$factor, table) [[2]], 0),
+                       OFF = c(0, tapply(info_b$Stage, info_b$factor, table) [[3]],0 , 0),
+                       ON = tapply(info_b$Stage, info_b$factor, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -4]
+data_chi
+chisq.test(data_chi)
+
+#chi test san not, IV, x
+
+data_chi2 <- data.frame("StageI_II" = colSums(data_chi[2:3,]),
+                    "StageIII_IV" = colSums(data_chi[4:5,]))
+data_chi2
+chisq.test(data_chi2)
+```
+
+```{r}
+library("ggsci")
+
+ggplot(data, aes(x = Stage, y = percent, fill = Type))+
+  geom_bar(stat="identity", 
+           position=position_dodge(), 
+           color = "black")+
+  scale_fill_jco()+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+
+ggplot(data, aes(x = Type, y = percent, fill = Stage))+
+  geom_bar(stat="identity", 
+           position=position_dodge(), 
+           color = "black")+
+  scale_fill_jco()+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+# age
+```{r}
+Stage <- info_b$age_at_diagnosis/(365)
+
+Infos <- data.frame(Type = info_b$factor)
+
+Infos <- cbind(Infos, Stage = Stage)
+
+#Variable quanti
+tapply(Infos$Stage, Infos$Type, mean)
+tapply(Infos$Stage, Infos$Type, sd)
+
+
+boxplot(Infos$Stage~Infos$Type)
+
+fit <- aov(Infos$Stage~Infos$Type)
+summary(fit)
+```
+# Tumor weight
+```{r}
+Stage <- info_b$cgc_sample_initial_weight
+
+Infos <- data.frame(Type = info_b$factor)
+
+Infos <- cbind(Infos, Stage = Stage)
+
+#Variable quanti
+tapply(Infos$Stage, Infos$Type, mean)
+tapply(Infos$Stage, Infos$Type, sd)
+
+
+boxplot(Infos$Stage~Infos$Type)
+
+fit <- aov(Infos$Stage~Infos$Type)
+summary(fit)
+```
+# Lymph node
+
+```{r}
+
+Stage <- info_b$xml_number_of_lymphnodes_positive_by_he
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+
+#Variable quanti
+tapply(Infos$Stage, Infos$Type, mean, na.rm = T)
+tapply(Infos$Stage, Infos$Type, sd, na.rm = T)
+
+
+boxplot(Infos$Stage~Infos$Type)
+
+fit <- aov(Infos$Stage~Infos$Type)
+summary(fit)
+```
+
+
+
+
+
+```{r}
+
+
+Stage <- info_b$xml_number_of_lymphnodes_positive_by_he
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+#Variable quanti : ici on la discr?tise
+LymphNode <- rep(NA, nrow(Infos))
+LymphNode[which(Infos$Stage == 0)] = "N0"
+LymphNode[which(Infos$Stage >= 1 & Infos$Stage <=3)] = "N1"
+LymphNode[which(Infos$Stage >= 4 & Infos$Stage <=9)] = "N2"
+LymphNode[which(Infos$Stage >= 10)] = "N3"
+
+Infos <- cbind(Infos, LymphNode = LymphNode)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$LymphNode, Infos$Type, table) [[1]], 0),
+                       Honly = tapply(Infos$LymphNode, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$LymphNode, Infos$Type, table) [[3]], 0),
+                       ON = tapply(Infos$LymphNode, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+
+#chi test san not, IV, x
+
+data_chi2 <- data.frame("N0" = t(data_chi[1,]),
+                        "N1" = t(data_chi[2,]),
+                    "Nsup1" = colSums(data_chi[3:4,]))
+data_chi2
+chisq.test(data_chi2)
+```
+
+# Meta
+
+```{r}
+Stage <- info_b$xml_distant_metastasis_present_ind2
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]]),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]]),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+
+#chi test san not, IV, x
+
+data_chi2 <- data_chi[-1,]
+data_chi2
+chisq.test(data_chi2)
+```
+
+```{r}
+Stage <- info_b$xml_cytokeratin_immunohistochemistry_staining_method_micrometastasis_indicator
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]]),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]]),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+
+#chi test san not, IV, x
+
+data_chi2 <- data_chi[-1,]
+data_chi2
+chisq.test(data_chi2)
+```
+
+
+
+
+
+```{r}
+colnames(info_b)[grep("metas", colnames(info_b))]
+
+```
+
+
+
+
+
+
+# ER
+
+```{r}
+Stage <- info_b$ER_CALL
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]]),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]]),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+```
+# PR
+```{r}
+Stage <- info_b$PGR_CALL
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]], 0),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]]),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+```
+
+# HER2
+```{r}
+Stage <- info_b$HER2_CALL
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]]),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]], 0),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+```
+# Histo
+colnames(info_b)[grep("histo", colnames(info_b))]
+```{r}
+Stage <- info_b$cgc_case_histological_diagnosis
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+tapply(Infos$Stage, Infos$Type, table)
+```
+```{r}
+data_ch <- data.frame(OFF = c(10, 5),
+                      H = c(32, 7),
+                      CT = c(17, 7),
+                      ON = c(104, 6))
+
+chisq.test(data_ch)
+```
+
+
+#Lehman
+```{r}
+Stage <- info_b$TNBCtype
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]]),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]]),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+
+```
+```{r}
+
+coucou <- tapply(Infos$Stage, Infos$Type, table)
+
+for (i in 1:length(coucou)) {
+  coucou[[i]] <-coucou[[i]] / sum(coucou[[i]])*100
+}
+
+data <- coucou %>% cbind(percent = flatten_dbl(.), 
+                      Stage= names(flatten_dbl(.)), 
+                      Type = rep(c( "CTonly", "Honly", "OFF", "ON" ), each = 9))
+
+data <- data.frame(Stage = unlist(data[, 3]),
+                   percent = unlist(data[, 2]),
+                   Type = unlist(data[, 4]))
+data
+
+
+
+
+
+
+
+
+ggplot(data, aes(x = Stage, y = percent, fill = Type))+
+  geom_bar(stat="identity", 
+           position=position_dodge(), 
+           color = "black")+
+  scale_fill_jco()+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+
+ggplot(data, aes(x = Type, y = percent, fill = Stage))+
+  geom_bar(stat="identity", 
+           position=position_dodge(), 
+           color = "black")+
+  scale_fill_jco()+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+```{r}
+Stage <- info_b$TNBCtype_4
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+data_chi <- data.frame(CTonly = c(tapply(Infos$Stage, Infos$Type, table) [[1]]),
+                       Honly = tapply(Infos$Stage, Infos$Type, table) [[2]],
+                       OFF = c(tapply(Infos$Stage, Infos$Type, table) [[3]]),
+                       ON = tapply(Infos$Stage, Infos$Type, table) [[4]])
+data_chi
+rownames(data_chi) <- data_chi$ON.Var1
+data_chi <- data_chi[, -c(2,5)]
+data_chi
+chisq.test(data_chi)
+
+
+```
+```{r}
+
+coucou <- tapply(Infos$Stage, Infos$Type, table)
+
+for (i in 1:length(coucou)) {
+  coucou[[i]] <-coucou[[i]] / sum(coucou[[i]])*100
+}
+
+data <- coucou %>% cbind(percent = flatten_dbl(.), 
+                      Stage= names(flatten_dbl(.)), 
+                      Type = rep(c( "CTonly", "Honly", "OFF", "ON" ), each = 7))
+
+data <- data.frame(Stage = unlist(data[, 3]),
+                   percent = unlist(data[, 2]),
+                   Type = unlist(data[, 4]))
+data
+
+
+
+
+
+
+
+
+ggplot(data, aes(x = Stage, y = percent, fill = Type))+
+  geom_bar(stat="identity", 
+           position=position_dodge(), 
+           color = "black")+
+  scale_fill_jco()+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+
+ggplot(data, aes(x = Type, y = percent, fill = Stage))+
+  geom_bar(stat="identity", 
+           position=position_dodge(), 
+           color = "black")+
+  scale_fill_jco()+
+
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.title = element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10),
+      legend.position="right")
+```
+# Cluster 
+
+```{r}
+colnames(info_b)[grep("Clusters", colnames(info_b))]
+
+```
+## CNV
+```{r}
+Stage <- info_b$subtype_CNV.Clusters
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+tapply(Infos$Stage, Infos$Type, table) 
+```
+
+
+
+## miRNA
+```{r}
+Stage <- info_b$subtype_miRNA.Clusters
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+tapply(Infos$Stage, Infos$Type, table) 
+```
+
+
+
+
+
+
+## lncRNA
+```{r}
+Stage <- info_b$subtype_lncRNA.Clusters
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+tapply(Infos$Stage, Infos$Type, table) 
+```
+
+
+
+
+
+## mRNA
+```{r}
+Stage <- info_b$subtype_mRNA.Clusters
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+tapply(Infos$Stage, Infos$Type, table) 
+```
+
+```{r}
+data.test <- data.frame(c(10,33, 21, 107),
+                        c(6,6,3,4))
+
+chisq.test(data.test)
+```
+
+
+## Meth
+```{r}
+Stage <- info_b$subtype_DNA.Methylation.Clusters
+
+Infos <- data.frame(Type = info_b$factor)
+
+
+Infos <- cbind(Infos, Stage = Stage)
+
+
+tapply(Infos$Stage, Infos$Type, table) 
+
+```
+```{r}
+data_chi <- data.frame(OFF = c(8,8),
+                       Honly = c(28,11),
+                       CT = c(15,9),
+                       ON = c(87,24))
+
+rownames(data_chi) <- c("C4", "Others")
+data_chi
+chisq.test(data_chi)
+```
+
+
+# Survie
+```{r}
+library(survival)
+library(survminer)
+```
+
+## HER2
+```{r}
+years_to_death <- info$gdc_cases.diagnoses.days_to_death[]/(30.5)
+years_to_last_follow_up <- info$days_to_last_follow_up[]/(30.5)
+New_tumor_event <- (info$cgc_case_new_tumor_event_after_initial_treatment[])
+Mort <-  info$subtype_vital_status[]
+
+head(data.frame(years_to_death, years_to_last_follow_up, New_tumor_event, Mort))
+
+#survie gloable : le premier ?venement est la mort
+Suivi_Mort = years_to_death
+Suivi_Mort[which(is.na(Suivi_Mort)==TRUE)] <- years_to_last_follow_up[which(is.na(Suivi_Mort)==TRUE)] 
+
+status_mort=rep(NA, length(years_to_death))
+status_mort[which(Mort=="Alive")]=0
+status_mort[which(Mort=="Dead")]=1
+
+#survie sans progression : le premier ?venement est la mort ou la rechute
+Suivi_progression = years_to_last_follow_up
+#on prend la date du dernier suivi, et si pas d'info on prend la date de la mort (g?n?ralement c'est exclusif)
+Suivi_progression[which(is.na(years_to_last_follow_up)==TRUE)]=years_to_death[which(is.na(years_to_last_follow_up)==TRUE)]
+
+status_recidive=rep(NA, length(New_tumor_event))
+status_recidive[which(New_tumor_event== "NO")]=0
+status_recidive[which(is.na(New_tumor_event)==T)]=0 
+
+status_recidive[which(New_tumor_event == "YES" | Mort=="Dead")] = 1 
+
+head(cbind(Suivi_progression, status_recidive, Suivi_Mort, status_mort),115)
+
+```
+```{r}
+Quant = info$`DMRTC2|63946`
+
+mydata=data.frame(time=Suivi_progression,
+                  status=status_recidive,
+                  Decile=Quant)
+
+mydata <- mydata[id_her2,]
+
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main="Survie globale",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+#
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort,
+                  status=status_mort,
+                  Decile=Quant)
+mydata2 <- mydata2[id_her2,]
+
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE,
+  ncol = 2, nrow = 1, risk.table.height = 0.3)
+```
+```{r}
+Quant = info$`TDRD1|56165`
+
+mydata=data.frame(time=Suivi_progression,
+                  status=status_recidive,
+                  Decile=Quant)
+
+mydata <- mydata[id_her2,]
+
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main="Survie globale",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+#
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort,
+                  status=status_mort,
+                  Decile=Quant)
+mydata2 <- mydata2[id_her2,]
+
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE,
+  ncol = 2, nrow = 1, risk.table.height = 0.3)
+```
+
+## HORMAD1
+```{r}
+
+#Quant[which(is.element(Quant, c(1, 3, 4, 5))==TRUE)] = 1
+
+Quant = info$`HORMAD1|84072`
+
+
+mydata=data.frame(time=Suivi_progression,
+                  status=status_recidive,
+                  Decile=Quant)
+
+#mydata <- mydata[id_basal,]
+
+
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main="Survie globale",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+#
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort,
+                  status=status_mort,
+                  Decile=Quant)
+#mydata2 <- mydata2[id_basal,]
+
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE,
+  ncol = 2, nrow = 1, risk.table.height = 0.3)
+```
+
+## CT83
+```{r}
+Quant = info$`CXorf61|203413`
+
+
+mydata=data.frame(time=Suivi_progression,
+                  status=status_recidive,
+                  Decile=Quant)
+
+#mydata <- mydata[id_basal,]
+
+
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main="Survie globale",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+#
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort,
+                  status=status_mort,
+                  Decile=Quant)
+#mydata <- mydata[id_basal,]
+
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BREAST",
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE,
+  ncol = 2, nrow = 1, risk.table.height = 0.3)
+```
+
+
+
+# H & CT
+```{r}
+years_to_death=info_b$gdc_cases.diagnoses.days_to_death/(30.5)
+years_to_last_follow_up=info_b$days_to_last_follow_up/(30.5)
+
+New_tumor_event=(info_b$cgc_case_new_tumor_event_after_initial_treatment)
+Mort = info_b$subtype_vital_status
+head(data.frame(years_to_death, years_to_last_follow_up, New_tumor_event, Mort))
+
+#survie gloable : le premier ?venement est la mort
+Suivi_Mort = years_to_death
+Suivi_Mort[which(is.na(Suivi_Mort)==TRUE)] = years_to_last_follow_up
+
+status_mort=rep(NA, length(years_to_death))
+status_mort[which(Mort=="Alive")]=0
+status_mort[which(Mort=="Dead")]=1
+
+#survie sans progression : le premier ?venement est la mort ou la rechute
+Suivi_progression = years_to_last_follow_up
+#on prend la date du dernier suivi, et si pas d'info on prend la date de la mort (g?n?ralement c'est exclusif)
+Suivi_progression[which(is.na(years_to_last_follow_up)==TRUE)]=years_to_death[which(is.na(years_to_last_follow_up)==TRUE)]
+
+status_recidive=rep(NA, length(New_tumor_event))
+status_recidive[which(New_tumor_event== "NO")]=0
+status_recidive[which(is.na(New_tumor_event)==T)]=0 
+
+status_recidive[which(New_tumor_event == "YES" | Mort=="Dead")] = 1 
+
+head(cbind(Suivi_progression, status_recidive, Suivi_Mort, status_mort),10)
+```
+
+```{r}
+summary(cbind(Suivi_progression, status_recidive, Suivi_Mort, status_mort))
+```
+
+
+
+
+```{r}
+
+#Quant[which(is.element(Quant, c(1, 3, 4, 5))==TRUE)] = 1
+
+Quant = (info_b$`CXorf61|203413`==1 & info_b$`HORMAD1|84072` == 1)
+Quant[which(info_b$`CXorf61|203413`==1 & info_b$`HORMAD1|84072` == 0)] <- "CT"
+Quant[which(info_b$`CXorf61|203413`==0 & info_b$`HORMAD1|84072` == 1)] <- "HORMAD1"
+
+mydata=data.frame(time=Suivi_progression,
+                  status=status_recidive,
+                  Decile=Quant)
+
+
+# List of ggsurvplots
+splots <- list()
+fit_recid=survfit(Surv(time,status)~Decile,data=mydata)
+splots[[1]] <- ggsurvplot(fit_recid, data = mydata,
+   legend = "bottom",
+   legend.title = "BREAST",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+ #  palette = c("black",
+  #            "hotpink3",
+   #            "darkcyan",
+    #          "goldenrod3"),
+   font.x = c(10),
+   font.y = c(10),
+   main="Survie globale",
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+#
+
+#2e plot = survie globale
+mydata2=data.frame(time=Suivi_Mort,
+                  status=status_mort,
+                  Decile=Quant)
+
+fit_mort=survfit(Surv(time,status)~Decile,data=mydata2)
+splots[[2]] <- ggsurvplot(fit_mort, data = mydata2,
+   legend = "bottom",
+   legend.title = "BREAST",
+  # legend.labs = c("High",
+   #                "Low",
+    #              "Normal-like+" ),
+ #  palette = c("black",
+  #            "hotpink3",
+   #            "darkcyan",
+    #          "goldenrod3"),
+   font.x = c(10),
+   font.y = c(10),
+   main=paste("Survie globale"),
+   pval = TRUE,
+              risk.table = TRUE,   surv.median.line=c("v"),
+              tables.y.text = FALSE,
+              ggtheme = theme_classic())
+  
+# Arrange multiple ggsurvplots and print the output
+arrange_ggsurvplots(splots, print = TRUE,
+  ncol = 2, nrow = 1, risk.table.height = 0.3)
+
+```
+
+
+```{r}
+library(survival) ; library(survminer)
+
+Stage = info_b$tumor_stage %>% as.factor
+levels(Stage)
+Stage = Stage %>% as.character
+
+#Stage[which(is.element(Stage, c("stage i", "stage ia", "stage ib", "stage ii", "stage iia", "stage iib", "stage iic")))] = "Stage I-II"
+#Stage[which(is.element(Stage, c("stage iii", "stage iiia", "stage iiib", "stage iiic", "stage iv", "stage iva", "stage ivb")))] = "Stage III-IV"
+
+Stage[which(is.element(Stage, c( "stage ii", "stage iia", "stage iib", "stage iic")))] = "Stage II"
+Stage[which(is.element(Stage, c("stage i", "stage ia", "stage ib")))] = "Stage I"
+
+Stage[which(is.element(Stage, c("stage iii", "stage iiia", "stage iiib", "stage iiic")))] = "Stage III"
+Stage[which(is.element(Stage, c("stage iv", "stage iva", "stage ivb")))] = "Stage IV"
+
+Stage[which(Stage =="not reported")] = NA
+Stage[which(Stage =="stage x")] = NA
+
+Stage = Stage %>% as.factor
+Stage = relevel(Stage, ref = "Stage I")
+
+
+
+mydata= data.frame(time=Suivi_progression,
+                  status=status_recidive,
+                  Decile=Quant,
+                  Stage = Stage)
+
+mydata$Decile = relevel(as.factor(mydata$Decile), ref= "OFF")
+
+
+res.cox <- coxph( Surv(time, status) ~ Decile + Stage  , 
+                data = mydata )
+res.cox
+```
+
+
+
+```{r}
+plot=ggforest(res.cox, main="Hazard Ratio Survival Breast")
+
+plot=plot+theme_classic()+
+ theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+              text=element_text(),
+              axis.title = element_text(face="bold"),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 9))
+print(plot)
+```
+
+
+```{r}
+library(randomForest)
+
+library(parallel)
+library(doParallel)
+
+library(caret)
+```
+
+#Donn?es
+On cherche les liens entre Exp Hormad/CT83 (variable ? expliquer) et l'expression des TS (variables explicatives)
+
+Avant toute chose il faut nettoyer la base de donn?es : supprimer les variables redondanteset les ?l?ments qui ne nous int?resse pas vraiment
+```{r}
+data <- info_b
+
+```
+#RandomForest
+
+
+```{r}
+set.seed(123)
+fit <- randomForest(factor ~ ., data = data,
+                    # ntree = 500, 
+                   # mtry = 2, 
+                    na.action = na.roughfix)
+```
+
+
+Th?orie
+----------
+
+Repose sur la classification par arbres d?cisionnels, une m?thode d'apprentissage supervis?. Les arbres d?cisionnels visent ? pr?dire les valeurs prises par une variable en fonction d'un jeu de variables d'entr?e (qu'on appellera ici les descripteurs). Cette pr?diction se fait ? travers la construction d'un arbre dont chaque noeud correspond ? une d?cision quant ? la valeur de la variable ? pr?dire. Cette d?cision est prise en fonction de la valeur d'un des descripteurs.
+
+Ex ici : http://perso.ens-lyon.fr/lise.vaudor/classification-par-arbres-decisionnels/
+
+L'arbre de d?cision est cr?? de sorte que chaque noeud divise un ensemble d'individus en deux sous-ensembles les plus homog?nes possibles en terme de variable ? pr?dire.
+
+Pour calculer l'h?t?rog?n?it? d'un ensemble d'individus, on a recours ? une mesure appel?e impuret?, et ? une fonction dite index de Gini, qui repose sur la probabilit? qu'un individu dans l'ensemble consid?r? soit de classe A (resp B, pour les variables cat?gorielles. Repose sur le RMSE pour les variables quanti). En gros, chaque noeud de l'arbre est construit de sorte ? r?duire le plus possible l'impuret? ; c?d on va maximiser la diff?rence entre l'impuret? de la branche parent et les impuret?s des branches enfants. 
+
+Ca, c'est pour le principe des arbres d?cisionnels.
+
+Les for?ts al?atoires sont compos?e d'un ensemble d'arbres d?cisionnels. Ces arbres se distinguent les uns des autres par le sous-?chantillon de donn?es sur lequel ils sont entra?n?s. Ces sous-?chantillons sont tir?s au hasard (d'o? le terme "al?atoire") dans le jeu de donn?es initial.
+
+Le principe de l'algo est le suivant: 
+1. On cr?? B (= ntree) nouveaux ensembles d'apprentissages par un double processus d'?chantillonnage : 
+  - Sur les observations, en utilisant un tirage avec remise d'un nombre N d'observations identique ? celui des donn?es d'origine (technique connue sous le nom de bootstrap),
+  - et sur les p pr?dicteurs, en n'en retenant qu'un ?chantillon de cardinal m < p (=mtyr)
+    
+2. Sur chaque ?chantillon, on entra?ne un arbre de d?cision selon une des techniques connues. Cet arbre sera construit sur une fractionj des donn?es ("in bag"), qui sert ? l'entrainement de l'algorithme. Pour chacun des individus restants ("out of bag"), l'algo peut pr?dire une classe ou une corr?lation.
+
+3. On stocke les B pr?dictions de la variable d'int?r?t pour chaque observation d'origine.
+
+4. La pr?diction de la for?t al?atoire est alors un simple vote majoritaire (Ensemble learning) : La classe pr?dite pour chaque individu est, par d?faut, celle qui recueille le plus de votes sur l'ensemble des arbres o? l'individu est "out of bag".
+
+*L'importance d'une variable* dans la classification correspond ? la diminution moyenne de l'impuret? qu'elle permet. Pour chaque arbre, la diminution totale de l'impuret? li?e ? une variable correspond ? la diminution de l'impuret? cumul?e sur l'ensemble des noeuds qu'elle r?git. Cette diminution est ensuite moyenn?e sur l'ensemble des arbres.
+
+Pratique
+------------
+
+On y va avec la fonction par d?faut (et set.seed(123)). On utilise une seule option pour le moment qui concerne les donn?es non disponibles na.action = na.roughfix qui remplace les donn?es absentes par des valeurs m?dianes. On aurait aussi pu choisir na.omit.
+Le calcul est assez long en absence de paral?lisation
+
+```{r}
+
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+```
+
+
+
+```{r}
+set.seed(95014)
+fitControl <- trainControl(method = "repeatedcv",
+                           allowParallel = TRUE,
+                           number=10, 
+                           repeats=3,
+                           search = 'random')
+```
+
+```{r}
+
+data <- data[, -which(colnames(data) %in% c("treatments", "disease_type", "gdc_annotations",
+                                            "gdc_cases.annotations", "gdc_cases.samples.portions.slides",
+                                            "gdc_cases.samples.portions.analytes.annotations",
+                                            "gdc_cases.samples.portions.analytes.aliquots.annotations")) ]
+
+#on enl?ve les facteurs ? un niveau
+compte <- c()
+for (i in 1:ncol(data)) {
+  if (data[, i] %>% as.factor %>% levels %>% length <= 1) {
+    compte <- c(compte, i)
+  }
+}
+
+data <- data[, -compte]
+# On enl?ve les facteurs incomples
+compte <- c()
+for (i in 1:ncol(data)) {
+  data[,i]<- as.character(data[, i])
+  
+  if (sum(is.na(data[, i])) >= 200) { # On supprime les facteurs avec troop de NA
+    compte <- c(compte, i)
+  }else{
+    data[which(is.na(data[, i]) == TRUE), i] = "Ind" # on remplace les rares NA  par Ind
+  }
+  data[,i]<- as.factor(data[, i])
+  
+}
+
+data <- data[, -compte]
+
+
+
+#on enl?ve les facteurs ? 100 niveau
+compte <- c()
+for (i in 1:ncol(data)) {
+  if (data[, i] %>% as.factor %>% levels %>% length >= 50) {
+    compte <- c(compte, i)
+  }
+}
+
+data <- data[, -compte]
+#on enl?ve Hormad et CT83
+compte <- c(grep("HORMAD1", colnames(data)),
+            grep("CXorf61", colnames(data)))
+data <- data[, -compte]
+
+
+dim(data)
+```
+In randomeForest() have tuneRF() for searching best optimal mtry values given for your data. We will depend on OOBError to define the most accurate mtry for our model which have the least OOBEError.
+
+```{r}
+set.seed(1)
+x <- data[, 2:107]
+y <- data[, 1]
+bestMtry <- tuneRF(x,y, stepFactor = 1.5, improve = 1e-5, ntree = 500)
+```
+
+```{r}
+print(bestMtry)
+```
+
+
+```{r}
+# Fractionner les donn?es
+train <- data[, ] %>% sample_frac(0.8)
+test <- anti_join(data[, ], train)
+
+# detectCores : Find out how many cores are available (if you don't already know)
+#makeCluster :  Create cluster with desired number of cores
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster) # Register cluster
+
+# Find out how many cores are being used
+getDoParWorkers()
+
+set.seed(95014)
+fitControl <- trainControl(verboseIter = T,
+                           method = "repeatedcv", #Manual search by create 10 folds and repeat 3 times
+                           allowParallel = TRUE,
+                           classProbs = TRUE,
+
+                           # search = 'grid',
+                           number=10, 
+                           repeats=3)
+
+
+mtry <-  c(10, 15, 20, 30, 40)
+#create tunegrid with 15 values from 1:15 for mtry to tunning model. Our train function will change number of entry variable at each split according to tunegrid. 
+tunegrid <- expand.grid(.mtry = mtry) 
+
+mod_clinic <- train(factor ~ ., data = train, 
+                    method = "rf",
+                    metric = 'Accuracy',
+                   # tuneGrid = tunegrid,
+                    ntree = 500,
+                   tuneLength  = 15,
+                   trControl = fitControl, 
+                   na.action = na.omit
+                  )
+print(mod_clinic)
+getTrainPerf(mod_clinic)
+plot(mod_clinic)
+
+```
+We can see the highest accuracy = 86% when mtry = 4.
+
+
+```{r}
+## Get the ROC curve
+roc0 <- roc(test$factor, 
+            predict(mod_clinic, test, type = "prob")[,1], 
+            levels = rev(levels(testingSet$Class)))
+roc0
+```
+
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+
+
+At this point we have a trained model in the fit object, and can take a number of steps to evaluate the suitability of this model, including accuracy and a confusion matrix that is based on comparing the modeled data to the held out folds.
+```{r}
+mod_clinic
+mod_clinic$resample
+
+```
+
+### Performance
+https://topepo.github.io/caret/measuring-performance.html
+
+
+On voit dans l'objet mod que trois mtry (nombre de variables test?es ? chaque division) ont ?t? test?s : 2, 183 et et 365 
+
+Figure l'Accuracy/RMSE et la statistique du kappa/R-squarred. Plus l'Accuracy et le kappa sont grand plus le mod?le est bon. 
+
+la fonction train que nous utilisons transforme, par d?faut, chaque modalit?s en autant de variables ? deux modalit? : pr?sence absence. C'est pourquoi il peut y avoir beaucoup plus de variables dans ce mod?le que dans le premier. L'int?r?t de cette transformation est de neutraliser un d?faut de Random Forest qui consiste ? accorder plus d'importance aux variables ayant beaucoup de modalit?s. 
+
+```{r}
+print(mod_clinic$finalModel)
+
+```
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+col_fun = colorRamp2(c( 0, 100), c("black", "red"))
+
+
+as.matrix(mod_clinic$finalModel$confusion[, 1:4] / rowSums(mod_clinic$finalModel$confusion[, 1:4]) *100) %>%
+  Heatmap(., col = col_fun, name = "% class error", column_title = "Confusion Matrix")
+```
+
+On voit le nombre d'arbre (500), le mtry (183), Le Mean of squareed residual. 
+
+####CHoix du ntree : 
+on regarde comment r?duit l'out of Bag en fonction du nombre d'arbre g?n?r?s
+```{r}
+plot(mod_clinic$finalModel$err.rate[, 1], type = "l", xlab = "nombre d'arbres", ylab = "erreur OOB")
+
+
+```
+
+Comme vous le savez, chaque arbre est entra?n? sur une fraction des data, qui est consid?r?e comme ? in-bag ?. Ce qui permet ? chaque arbre, une fois construit, d'estimer son taux d'erreur sur les donn?es qu'il a laiss? ? out-of-bag ? : plus ce taux est faible, plus le mod?le est juste. Ce chiffre ? lui seul pourrait servir d'indicateur de performance du mod?le.
+
+Vous pouvez acc?der au nombre de fois qu'un individu a ?t? laiss? ? out of bag ? en avec model$oob.times. Si nous dressons un histogramme :
+
+```{r}
+hist(mod_clinic$finalModel$oob.times)
+```
+
+
+```{r}
+test$predicted <- predict(mod_clinic, test)
+conf <- confusionMatrix(data = test$predicted, reference = test$Type)
+
+conf$byClass
+```
+
+```{r}
+prediction <- predict(mod_clinic, test,type='prob')
+library(pROC)
+auc1 <-roc(test$Type, prediction[,1])
+auc2 <-roc(test$Type, prediction[,2])
+auc3 <-roc(test$Type, prediction[,3])
+auc4 <-roc(test$Type, prediction[,4])
+
+par(mfrow = c(2,2))
+plot(auc1)
+plot(auc2)
+plot(auc3)
+plot(auc4)
+```
+
+
+
+On peut afficher l'importance de variables ainsi
+```{r}
+varImpPlot(mod_clinic$finalModel, 
+           n.var=min(40, nrow(mod_clinic$finalModel$importance)),
+           cex=0.5)
+abline(v=c(2,10), 
+       col=c("blue","red"))
+
+```
+
+
+```{r}
+varImp(mod_clinic)
+plot(varImp(mod_clinic), top = 20)
+```
+
+
+
+```{r}
+par(mfrow = c(3,3))
+
+plot(factor ~ subtype_mRNA.Clusters, data = data)
+plot(factor ~ subtype_DNA.Methylation.Clusters, data = data)
+plot(factor ~ subtype_miRNA.Clusters, data = data)
+plot(factor ~ subtype_Protein.Clusters, data = data)
+plot(factor ~ xml_breast_carcinoma_estrogen_receptor_status, data = data)
+plot(factor ~ xml_breast_carcinoma_progesterone_receptor_status, data = data)
+
+plot(factor ~ subtype_PARADIGM.Clusters, data = data)
+#plot(Type ~ subtype_Pan.Gyn.Clusters, data = data)
+plot(factor ~ subtype_CNV.Clusters, data = data)
+
+
+```
+```{r}
+plot(Type ~ `C4orf40|401137`, data = data)
+
+```
+
+```{r}
+mod_clinic$finalModel$importance[order(mod_clinic$finalModel$importance),] %>% head(., 30)
+```
+
+
+
+
+
+
+
+
+
+
+

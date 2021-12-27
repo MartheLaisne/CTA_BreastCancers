@@ -1,0 +1,146 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+TCGA_basal_ONvsOFF_RNA <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/TCGA_basal_ONvsOFF.txt")
+
+
+CCLE_DEA_TNBC_ON_vs_OFF_GDSC2def <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/191001_GDSC2/DEA/DEA_TNBC_ON_vs_OFF_GDSC2def.txt")
+
+HMLE_H1_CT83vsControl <- read.delim("~/Desktop/These_Marthe/1_Bioinfo/210107_RNAseq_HMLE_Hormad1CT83_Blasti/4.DiffExprAnalysis/DEGlist/H1_CT83vsControl/H1_CT83vsControl.txt")
+
+ATAC_table_DEA_bothON_bothOFF2 <- read.table("~/Desktop/210622_TCGA_ATAC/Anno_table_DEA_bothON_bothOFF.txt", h = T, sep = "\t", row.names = 1)
+
+ATAC_table_DEA_bothON_bothOFF <- import.bed("~/Desktop/210622_TCGA_ATAC/table_DEA_bothON_bothOFF.bed")
+```
+
+```{r}
+library("rtracklayer")
+library("biomaRt")
+library("ChIPpeakAnno")
+```
+```{r}
+ensembl = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+TSS.mouse.NCBIM37 = getAnnotation(mart=ensembl, featureType="TSS")
+
+
+annotatedPeak = annotatePeakInBatch(ATAC_table_DEA_bothON_bothOFF, 
+                                    AnnotationData = TSS.mouse.NCBIM37)
+
+Annotatedbed = as.data.frame(annotatedPeak)
+
+maptable = getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"), 
+                 filters = "ensembl_gene_id", values = Annotatedbed$feature, mart = ensembl)
+
+ii = match(Annotatedbed$feature,maptable[,2])
+Annotatedbed$feature_symbol = maptable[ii,1]
+
+
+head(Annotatedbed)
+```
+
+
+```{r}
+TCGA_RNA <- subset(TCGA_basal_ONvsOFF_RNA, padj < 0.05)$symbol
+
+CCLE_RNA <- subset(CCLE_DEA_TNBC_ON_vs_OFF_GDSC2def, padj < 0.05)$symbol
+
+HMLE_RNA <- subset(HMLE_H1_CT83vsControl, padj < 0.1)$gene_name 
+
+
+
+```
+
+
+
+
+```{r}
+intersect(HMLE_RNA, Annotatedbed$feature_symbol) %>% length
+
+intersect(Annotatedbed$feature_symbol, CCLE_RNA)%>% length
+
+intersect(TCGA_RNA, Annotatedbed$feature_symbol)%>% length
+
+```
+```{r}
+
+# took list as input
+DataList <- list(HMLE_RNA = HMLE_RNA,
+                 CCLE_RNA = CCLE_RNA,
+                 TCGA_RNA = TCGA_RNA,
+                 TCGA_ATAC =  ATAC_table_DEA_bothON_bothOFF2 $feature_symbol)
+
+library(ggvenn)
+ggvenn(
+  DataList, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+
+```{r}
+library("ggVennDiagram")
+ggVennDiagram(DataList, label_alpha = 0)
+```
+
+
+```{r}
+TCGA_RNA <- subset(TCGA_basal_ONvsOFF_RNA, padj < 0.05 & log2FoldChange > 0)$symbol
+TCGA_ATAC <- subset(ATAC_table_DEA_bothON_bothOFF2, score >0 )$feature_symbol
+intersect(TCGA_RNA, TCGA_ATAC)
+
+# took list as input
+DataList <- list( TCGA_RNA = TCGA_RNA,
+                 TCGA_ATAC =  TCGA_ATAC)
+
+library(ggvenn)
+ggvenn(
+  DataList,   show_percentage = F,
+
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+```{r}
+TCGA_RNA <- subset(TCGA_basal_ONvsOFF_RNA, padj < 0.05 & log2FoldChange < 0)$symbol
+TCGA_ATAC <- subset(ATAC_table_DEA_bothON_bothOFF2, score <0 )$feature_symbol
+
+intersect(TCGA_RNA, TCGA_ATAC)
+
+# took list as input
+DataList <- list( TCGA_RNA = TCGA_RNA,
+                 TCGA_ATAC =  TCGA_ATAC)
+
+library(ggvenn)
+ggvenn(
+  DataList,
+  show_percentage = F,
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

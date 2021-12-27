@@ -2,7 +2,9 @@
 title: "R Notebook"
 output: html_notebook
 ---
-To perform the differential analysis between HORMAD1_CT83 pos and neg basal-like breast tumors 
+- To perform the differential analysis between HORMAD1_CT83 pos and neg basal-like breast tumors 
+
+- To make biplot on HORMAD1 / CT83 datas
 
 R version 3.5.3
 
@@ -65,124 +67,55 @@ WARNINGS: these RDS files are made to be used with R => 4 du to the inconsistenc
 ```{r}
 BRCA_basal_counts <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_basal_data_counts.rds")
 
-BRCA_breast_FPKMUQ <- readRDS("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/TCGA_Breast_data_FPKMUQv4.rds")
+sample_450K <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/RNA_Meth.txt", sep = "\t", h = F)
+
+sample_CNV <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/RNA_CNV.txt", sep = "\t", h = F)
+
+sample_ATAC <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/data/RNA_ATAC.txt", sep = "\t", h = F)
 ```
 
 
+```{r}
+Factor_H_CT <- read.table("C:/Users/marth/Desktop/These_Marthe/1_Bioinfo/0_Scripts Propres/res/patient_breast_all.txt", header = T, sep = "\t")
+```
 
 # Labels Tumors
+```{r}
+id_commun <- which(colnames(BRCA_basal_counts) %in% Factor_H_CT$patient)
+
+BRCA_basal_counts <- BRCA_basal_counts[, id_commun]
+
+
+id_match <- match(colnames(BRCA_basal_counts) , Factor_H_CT$patient)
+
+Factor_H_CT <- Factor_H_CT[id_match, ]
+
+```
+
+```{r}
+colnames(BRCA_basal_counts) == Factor_H_CT$patient
+```
+
+
 
 ```{r}
 # Grep id for basal like tumors
-id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
-id_NT <- which(colData(BRCA_breast_FPKMUQ)$shortLetterCode == "NT")
+id_basal <- which(colData(BRCA_basal_counts)$paper_BRCA_Subtype_PAM50 == "Basal")
+id_NT <- which(colData(BRCA_basal_counts)$shortLetterCode == "NT")
 
 
-# Grep expression vectors for HORMAD1 and CT83
-Gene_int = "HORMAD1"
-
-ENS_Hormad <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
-                           "ENSEMBL", "SYMBOL")
-
-k <- which(rowData(BRCA_breast_FPKMUQ)$ensembl_gene_id ==  ENS_Hormad$ENSEMBL )
-
-XP_Hormad <- assay(BRCA_breast_FPKMUQ)[k,]
-XP_Hormad_nb <- assay(BRCA_breast_FPKMUQ)[k, -id_basal]
-XP_Hormad_b <- assay(BRCA_breast_FPKMUQ)[k, id_basal]
-XP_Hormad_NT <- assay(BRCA_breast_FPKMUQ)[k,id_NT]
-
-
-Gene_int = "CT83"
-
-ENS_CT83 <- AnnotationDbi::select(org.Hs.eg.db, Gene_int,
-                           "ENSEMBL", "SYMBOL")
-
-k <- which(rowData(BRCA_breast_FPKMUQ)$ensembl_gene_id ==  ENS_CT83$ENSEMBL )
-
-XP_CT83 <- assay(BRCA_breast_FPKMUQ)[k,]
-XP_CT83_nb <- assay(BRCA_breast_FPKMUQ)[k,-id_basal]
-XP_CT83_b <- assay(BRCA_breast_FPKMUQ)[k,id_basal]
-XP_CT83_NT <- assay(BRCA_breast_FPKMUQ)[k,id_NT]
-
-par(mfrow=c(1,2)) 
-plot(sort(t(XP_Hormad_b)))
-plot(sort(t(XP_CT83_b)))
 ```
 
 
+
 ```{r}
-# THR based on HORMAD1 (r. CT83) expression in all tumors samples
-thr_h <-  mean(t(XP_Hormad_NT))+2*sd(t(XP_Hormad_NT))
-thr_ct <-  mean(t(XP_CT83_NT))+2*sd(t(XP_CT83_NT))
 
-
-Factor_H_CT <- data.frame(factor = rep(NA, length(t(XP_Hormad))), 
-                          patient = rep(NA, length(t(XP_Hormad))))
-
-id_ON <- which(t(XP_CT83) > thr_ct & t(XP_Hormad) > thr_h )
-Factor_H_CT[id_ON, "factor"] <- "ON"
-Factor_H_CT[id_ON, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_ON]
-
-id_CT <- which(t(XP_CT83) > thr_ct & t(XP_Hormad) <= thr_h )
-Factor_H_CT[id_CT, "factor"] <- "CTonly"
-Factor_H_CT[id_CT, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_CT]
-
-id_H <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) > thr_h )
-Factor_H_CT[id_H, "factor"] <- "Honly"
-Factor_H_CT[id_H, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_H]
-
-id_OFF <- which(t(XP_CT83) <= thr_ct & t(XP_Hormad) <= thr_h )
-Factor_H_CT[id_OFF, "factor"] <- "OFF"
-Factor_H_CT[id_OFF, "patient"] <- colData(BRCA_breast_FPKMUQ)$paper_patient[id_OFF]
-
-
-table(Factor_H_CT$factor)
 table(Factor_H_CT$factor[id_basal])
 
 ```
 > colData(dds)$paper_BRCA_Subtype_PAM50 <- colData(BRCA_basal_counts)$paper_BRCA_Subtype_PAM50
 > colData(dds)$paper_patient <- colData(BRCA_basal_counts)$paper_patient
 > colData(dds)$shortLetterCode <- colData(BRCA_basal_counts)$shortLetterCode
-
-```{r}
-par(mfrow=c(1,2)) 
-plot(sort(t(XP_Hormad_b)))
-abline(h = thr_h)
-plot(sort(t(XP_CT83_b)))
-abline(h = thr_ct)
-
-```
-```{r}
-id_basal <- which(colData(BRCA_breast_FPKMUQ)$paper_BRCA_Subtype_PAM50 == "Basal")
-
-data <- data.frame(HORMAD1 = (XP_Hormad_b),
-                   CT83 = (XP_CT83_b))
-data$type <- Factor_H_CT$factor[id_basal]
-
-
-library(ggplot2)
-
-ggplot(data = data, aes(x = (HORMAD1), y = (CT83), shape = type  ))+
-  geom_jitter(size = 3, color = "black", na.rm = T) + 
-  geom_rug(outside = TRUE)+
-  coord_cartesian(clip = "off")+
-  geom_hline(yintercept = (thr_ct))+
-  geom_vline(xintercept = (thr_h)) +
-  
-  scale_shape_manual(values = c(0:2, 5))+
-  scale_x_continuous(trans = 'log10')+
-  scale_y_continuous(trans = 'log10')+
-  
-
-
-  theme_classic()+ 
-  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
-              text=element_text(),
-              axis.title = element_text(face="bold"),
-              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
-              axis.text.y=element_text(colour="black", size = 10),
-      legend.position="right")
-```
 
 
 # DESeq2
@@ -194,8 +127,7 @@ ggplot(data = data, aes(x = (HORMAD1), y = (CT83), shape = type  ))+
 library(DESeq2)
 
 # load the design file
-sampleTable <- Factor_H_CT[id_basal,]
-sampleTable <- sampleTable[ match(colData(BRCA_basal_counts)$paper_patient, sampleTable$patient  ), ]
+sampleTable <- Factor_H_CT
 sampleTable$sampleName <- colnames(BRCA_basal_counts)
 rownames(sampleTable) <- colnames(BRCA_basal_counts)
 
@@ -293,13 +225,13 @@ int_diff_pos = which(data$padj < 0.05 &
 
 
 g1 = ggplot(data,
-       aes(y = -log10(padj), x = log2FoldChange))+
+       aes(y = -log10(padj), x = log2FoldChange, label = symbol))+
   geom_point(data = data[-c(int_diff_neg, int_diff_pos),], shape = 1, color ="black")+
   geom_point(data = data[int_diff_neg,], shape = 1,  color = "blue4")+
   geom_point(data = data[int_diff_pos,], shape = 1, color = "red4")+
 
   scale_x_continuous(limits = c(-15,15)) + 
-#  scale_y_continuous(limits = c(0,15)) +                  
+  scale_y_continuous(limits = c(0,15)) +                  
   theme_classic()+                                                     
   theme(plot.title = element_text(size = 10,hjust=0.5),    
               text=element_text(),
