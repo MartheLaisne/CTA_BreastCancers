@@ -1,0 +1,120 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+A partir de la pipeline de magali Hennion pour mapper les éléments transposables
+
+
+```{r warning=FALSE}
+library(DESeq2)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(scales)
+```
+
+
+```{r}
+dea_Control_H1_CT <- read.delim("C:/Users/Utilisateur/Desktop/Bioinfo/220104_HMLE_TE/hmle_rnaseq/mapping_HISAT2/counting_featureCounts/DEA_DESeq2/Tables/dea_Control_H1_CT.tsv")
+
+data_DEA_H1CT83_vs_ctl <- read.delim("C:/Users/Utilisateur/Desktop/Bioinfo/YO_Scripts propres/2020_Breast_Marthe/data/data_DEA_H1CT83_vs_ctl.txt")
+
+head(data_DEA_H1CT83_vs_ctl)
+```
+
+
+```{r}
+data = data.frame(dea_Control_H1_CT)
+
+data$ENSEMBL <- gsub("\\..*","",
+                     rownames(data))
+
+data$symbol <- mapIds(org.Hs.eg.db,
+                     keys=data$ENSEMBL,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+```
+```{r}
+data = data.frame(data_DEA_H1CT83_vs_ctl)
+
+```
+
+
+
+
+
+```{r}
+A = "CT83 & HORMAD1 ON  vs OFF"
+
+int_diff_neg = which(data$padj < 0.1
+                                    & data$log2FoldChange < 0)
+int_diff_pos = which(data$padj < 0.1 & 
+                                data$log2FoldChange > 0)
+
+id_genes = which(data$gene_name %in% c("HORMAD1", "CT83", "CDH1", "CD44", "KRT8", "KRT18") == T)
+
+g1 = ggplot(data,
+       aes(y = -log10(padj), x = log2FoldChange), label = gene_name)+
+  geom_point(data = data[-c(int_diff_neg, int_diff_pos),], shape = 1, color ="black")+
+  geom_point(data = data[int_diff_neg,], shape = 1, color ="blue", size = 3)+
+  geom_point(data = data[ int_diff_pos,], shape = 1, color ="red", size = 3)+
+
+  geom_text(data = data[id_genes,],aes(label = gene_name), hjust=0, vjust=0)+
+  
+  geom_vline(xintercept = log2(1))+
+  geom_vline(xintercept = -log2(1))+
+  geom_hline(yintercept = -log10(0.1))+
+
+  
+  scale_x_continuous(limits = c(-20,20)) + 
+  scale_y_sqrt(limits = c(0,60)) +    
+ #  coord_trans(x="log2")+
+  
+  theme_classic()+                                                     
+  theme(plot.title = element_text(size = 10,hjust=0.5),    
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),       
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+g1
+```
+```{r}
+library(plotly)
+
+ggplotly(g1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

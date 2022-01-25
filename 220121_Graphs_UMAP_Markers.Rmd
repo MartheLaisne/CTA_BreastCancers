@@ -1,0 +1,256 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(data.table)
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(ggplot2)
+library(gridExtra)
+
+```
+
+
+
+```{r}
+#Les coordonnées UMAP1/2, PC1/2
+dataGG <- data.frame(UMAP_1 = umap$UMAP_1, UMAP_2 = umap$UMAP_2)
+# dataGG <- data.frame(tsne$Y)
+
+#on ajoute les noms des samples
+dataGG$names <- rownames(umap)
+
+
+#et on ajoute l'expression db HORMAD1
+dataGG$hormad <- dt_normdat[which(rownames(dt_normdat) == "HORMAD1"), colnames(dt_normdat) %in% dataGG$names ] %>% t
+
+dataGG$CT83 <-  dt_normdat[which(rownames(dt_normdat) == "CT83"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+
+# Other markers
+dataGG$msrb3 <-  dt_normdat[which(rownames(dt_normdat) == "MSRB3"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$esr1 <-  dt_normdat[which(rownames(dt_normdat) == "ESR1"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$krt14 <-  dt_normdat[which(rownames(dt_normdat) == "KRT14"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$krt18 <-  dt_normdat[which(rownames(dt_normdat) == "KRT18"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$agr2 <-  dt_normdat[which(rownames(dt_normdat) == "AGR2"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$saa2 <-  dt_normdat[which(rownames(dt_normdat) == "SAA2"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+
+dataGG$krt23 <-  dt_normdat[which(rownames(dt_normdat) == "KRT23"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$fap <-  dt_normdat[which(rownames(dt_normdat) == "FAP"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$vwf <-  dt_normdat[which(rownames(dt_normdat) == "VWF"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$ptprc <-  dt_normdat[which(rownames(dt_normdat) == "PTPRC"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$cd3e <-  dt_normdat[which(rownames(dt_normdat) == "CD3E"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$cd19 <-  dt_normdat[which(rownames(dt_normdat) == "CD19"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+dataGG$cd14 <-  dt_normdat[which(rownames(dt_normdat) == "CD14"), colnames(dt_normdat) %in% dataGG$names ]%>% t
+
+## Les clusters
+
+dataGG$cluster <- Idents(dt_seurat)
+
+
+# Classif
+# update colData and pd_norm
+dataGG$cell_types_markers <- cell_types_simple
+
+```
+
+
+
+
+Cluster
+
+```{r}
+id_not <- which(dataGG$cell_types_markers %in% c("undecided", "unknown") == TRUE)
+
+gcluster = ggplot(data = dataGG[-id_not,], aes(x =UMAP_1, y = UMAP_2, color = cluster  ))+
+  geom_point(size = 4, shape = 1)+
+  theme_classic()+ 
+  scale_x_continuous(limits = c(-11, 11))+
+  scale_y_continuous(limits = c(-11, 11))+
+
+  
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("cluster") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+gtype = ggplot(data = dataGG[-id_not,]  , 
+               aes(x =UMAP_1, y = UMAP_2, color =  cell_types_markers ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Type") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+
+gtype
+```
+
+
+```{r}
+id_ct_exp <- which(dataGG$CT83 != 0)
+gCT83 = ggplot(data = dataGG[c(1,id_ct_exp),], aes(x =UMAP_1, y = UMAP_2, color = CT83 ))+
+  geom_point(size = 4, shape = 1)+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+  theme_classic()+ 
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("CT83") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+id_h_exp <- which(dataGG$hormad != 0)
+gHORMAD = ggplot(data = dataGG[c(1,id_h_exp),], aes(x =UMAP_1, y = UMAP_2, color = hormad ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Hormad1 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+
+gCT83
+gHORMAD
+```
+```{r}
+ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = krt14 ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Krt14 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+
+```
+```{r}
+ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = krt18 ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("Krt18 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+```{r}
+ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = agr2 ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("agr2 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+```{r}
+ggplot(data = dataGG, aes(x =UMAP_1, y = UMAP_2, color = saa2 ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_x_continuous(limits = c(-13, 13))+
+  scale_y_continuous(limits = c(-13, 13))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("saa2 expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+```{r}
+id_exp <- which(dataGG$fap != 0)
+
+
+ggplot(data = dataGG[id_exp,], aes(x =UMAP_1, y = UMAP_2, color = fap ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_y_continuous(limits = c(-15, 15))+
+  scale_x_continuous(limits = c(-15, 15))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("fap expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+
+```{r}
+id_exp <- which(dataGG$ptprc != 0)
+
+
+ggplot(data = dataGG[id_exp,], aes(x =UMAP_1, y = UMAP_2, color = ptprc ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_y_continuous(limits = c(-15, 15))+
+  scale_x_continuous(limits = c(-15, 15))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("ptprc expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+
+```{r}
+
+id_exp <- which(dataGG$vwf != 0)
+
+
+ggplot(data = dataGG[id_exp,], aes(x =UMAP_1, y = UMAP_2, color = vwf ))+
+  geom_point(size = 4, shape = 1) +
+  theme_classic()+
+  scale_color_gradient(low="grey80", high="red")+ 
+  scale_y_continuous(limits = c(-15, 15))+
+  scale_x_continuous(limits = c(-15, 15))+
+  xlab("UMAP 1") + ylab("UMAP 2") + ggtitle("vwf expression") +
+  theme(plot.title = element_text(size = 14, face = "bold",hjust = 0.5),
+        legend.title = element_blank(),
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 11),
+              axis.text.y=element_text(colour="black", size = 11))
+```
+
+
+
+
+
+

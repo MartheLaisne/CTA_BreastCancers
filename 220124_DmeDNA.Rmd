@@ -1,0 +1,272 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+
+```{r}
+library(SummarizedExperiment)
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+```
+
+
+```{r}
+meDNA <- readRDS("C:/Users/Utilisateur/Desktop/Bioinfo/ProjetTCGA_dataTCGA/meDNA_basal.rds")
+
+meDNA_NT <- readRDS("C:/Users/Utilisateur/Desktop/Bioinfo/ProjetTCGA_dataTCGA/meDNA_NT.rds")
+
+```
+
+Same prder for rows ?
+
+```{r}
+sum(rownames(meDNA_NT) == rownames(meDNA))
+```
+
+Calculate threshold
+
+```{r}
+Thr_CpG_NT <- apply(assay(meDNA_NT), 1, function(X){c(mean(X, na.rm = T) - 3*sd(X, na.rm = T),
+                                                      mean(X, na.rm = T) + 3*sd(X, na.rm = T))})
+
+Thr_CpG_NT[,1:5]
+```
+
+For each sample (column), compare each CpG value to the corresponding thr
+
+- map functions apply a function iteratively to each elelement of a list or a vector
+
+
+```{r}
+
+library(purrr)
+
+DmeDNA_hypo <- apply(assay(meDNA), 2,
+                FUN = function(X){
+                  map2(X,  t(Thr_CpG_NT)[,1],
+                     ~  .x < .y)
+                 
+                }
+
+                )
+
+head(DmeDNA_hypo[[1]])
+
+table(unlist(DmeDNA_hypo[[1]]))
+
+```
+
+
+
+```{r}
+DmeDNA_hyper <- apply(assay(meDNA), 2,
+                FUN = function(X){
+                  map2(X,  t(Thr_CpG_NT)[,2],
+                     ~  .x > .y)
+                 
+                }
+
+                )
+
+head(DmeDNA_hyper[[1]])
+
+sum(unlist(DmeDNA_hyper[[1]]), na.rm = T)
+```
+
+
+```{r}
+nb_hypo <- c()
+  
+for (i in 1:length(DmeDNA_hypo)) {
+
+  nb_hypo <- c(nb_hypo, sum(unlist(DmeDNA_hypo[[i]]), na.rm = T))
+}
+
+hist(nb_hypo)
+
+```
+
+```{r}
+nb_hyper <- c()
+  
+for (i in 1:length(DmeDNA_hyper)) {
+
+  nb_hyper <- c(nb_hyper, sum(unlist(DmeDNA_hyper[[i]]), na.rm = T))
+}
+
+hist(nb_hyper)
+```
+```{r}
+Factor_H_CT <- read.table("C:/Users/Utilisateur/Desktop/Bioinfo/YO_Scripts Propres/2020_Breast_Marthe/res/patient_breast_all.txt", header = T, sep = "\t")
+
+library(stringr)
+
+Factor_H_CT$id <- substr(Factor_H_CT$patient,1, 12)
+
+head(Factor_H_CT)
+```
+
+```{r}
+FactorHCT_basal <- Factor_H_CT[match(colData(meDNA)$patient, Factor_H_CT$id),]
+```
+
+
+```{r}
+boxplot(nb_hyper~FactorHCT_basal$factor)
+```
+
+```{r}
+boxplot(c(nb_hypo)~FactorHCT_basal$factor)
+
+```
+
+
+```{r}
+summary(aov(c(nb_hyper)~FactorHCT_basal$factor))
+```
+```{r}
+## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summariezed
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
+
+
+## Only Cpg Islands
+
+```{r}
+id_CpgI <- which(rowData(meDNA)$Relation_to_Island == "Island")
+
+
+nb_hypo_CGI <- c()
+  
+for (i in 1:length(DmeDNA_hypo)) {
+
+  nb_hypo_CGI <- c(nb_hypo_CGI, sum(unlist(DmeDNA_hypo[[i]])[id_CpgI], na.rm = T))
+}
+
+
+
+nb_hyper_CGI <- c()
+  
+for (i in 1:length(DmeDNA_hypo)) {
+
+  nb_hyper_CGI <- c(nb_hyper_CGI, sum(unlist(DmeDNA_hyper[[i]])[id_CpgI], na.rm = T))
+}
+
+data_plot <- data.frame(hypo = nb_hypo_CGI,
+                        hyper = nb_hyper_CGI,
+                        factor = FactorHCT_basal$factor)
+
+data_plot_hypo <- summarySE(data_plot, measurevar="hypo", groupvars=c("factor"))
+head(data_plot_hypo)
+
+
+data_plot_hyper <- summarySE(data_plot, measurevar="hyper", groupvars=c("factor"))
+head(data_plot_hyper)
+
+```
+
+```{r}
+boxplot(data_plot$hypo~data_plot$factor)
+
+
+summary(aov(data_plot$hypo~data_plot$factor))
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(data_plot_hypo, aes(x=factor, y=hypo, fill=factor)) + 
+    geom_bar(position=position_dodge(), stat="identity",
+             colour="black", # Use black outlines,
+             size=.3) +      # Thinner lines
+    geom_errorbar(aes(ymin=hypo-se, ymax=hypo+se),
+                  size=.3,    # Thinner lines
+                  width=.2,
+                  position=position_dodge(.9)) +
+    xlab("Basal-like") +
+    ylab("# Hypo CpG") +
+    scale_fill_hue(name="Basal-Like", # Legend label, use darker colors
+                   breaks=c("OFF","Honly", "CTonly", "ON")) +
+    ggtitle("Hypo") +
+  scale_x_discrete(limits = c("OFF","Honly", "CTonly", "ON"))+
+
+    theme_classic()
+```
+
+
+```{r}
+boxplot(c(nb_hyper_CGI)~FactorHCT_basal$factor)
+
+summary(aov(c(nb_hyper_CGI)~FactorHCT_basal$factor))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

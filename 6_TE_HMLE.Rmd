@@ -1,0 +1,76 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+A partir de la pipeline de magali Hennion pour mapper les éléments transposables
+
+
+```{r warning=FALSE}
+library(DESeq2)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(scales)
+```
+
+
+```{r}
+dea_Control_H1_CT <- read.delim("C:/Users/Utilisateur/Desktop/Bioinfo/220104_HMLE_TE/hmle_rnaseq/mapping_HISAT2/repeats_featureCounts/DEA_DESeq2/Tables/dea_Control_H1_CT.tsv")
+
+head(dea_Control_H1_CT)
+```
+
+
+
+
+
+
+
+```{r}
+A = "CT83 & HORMAD1 ON  vs OFF"
+data = data.frame(dea_Control_H1_CT)
+
+int_diff_neg = which(data$padj < 0.1
+                                    & data$log2FoldChange < 0)
+int_diff_pos = which(data$padj < 0.1 & 
+                                data$log2FoldChange > 0)
+
+
+g1 = ggplot(data,
+       aes(y = -log10(padj), x = log2FoldChange))+
+  geom_point(data = data[,], shape = 1, color ="black")+
+  
+  geom_vline(xintercept = log2(1.5))+
+  geom_vline(xintercept = -log2(1.5))+
+  geom_hline(yintercept = -log10(0.1))+
+
+  
+  scale_x_continuous(limits = c(-15,15)) + 
+  scale_y_continuous(limits = c(0,15)) +                  
+  theme_classic()+                                                     
+  theme(plot.title = element_text(size = 10,hjust=0.5),    
+              text=element_text(),
+              axis.title = element_text(face="bold", size=10),       
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 8),
+              axis.text.y=element_text(colour="black", size = 8),
+              legend.position = "right")
+g1
+```
+
+
+
+
+
+
+
+
+
+
+
+

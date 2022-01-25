@@ -1,0 +1,105 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Intro
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+```
+
+```{r}
+GSE118942_TPM_human_AllGenes_AllPDX <- read.delim("C:/Users/Utilisateur/Desktop/Bioinfo/211110_RNAseq_BreastPDXmeta_GSE118942/GSE118942_TPM_human_AllGenes_AllPDX.txt")
+
+
+GSE118942_metadata <- read.delim("C:/Users/Utilisateur/Desktop/Bioinfo/211110_RNAseq_BreastPDXmeta_GSE118942/GSE118942_metadata.txt")
+```
+
+```{r}
+which(colnames(GSE118942_TPM_human_AllGenes_AllPDX) %in% GSE118942_metadata$Preferred.Sample.Name == FALSE)
+```
+
+
+```{r}
+dt <- GSE118942_TPM_human_AllGenes_AllPDX[,3:ncol(GSE118942_TPM_human_AllGenes_AllPDX)]
+rownames(dt) <- make.names(GSE118942_TPM_human_AllGenes_AllPDX$symbol, unique = TRUE)
+
+coldata <- GSE118942_metadata[which(GSE118942_metadata$Preferred.Sample.Name %in%
+                                      colnames(dt) == TRUE),]
+
+
+coldata <- coldata[match(colnames(dt), coldata$Preferred.Sample.Name),]
+
+coldata$Tissue[which(coldata$Tissue == "NA Liver")] <- "Liver"
+
+head(coldata)
+```
+
+```{r}
+head(dt)
+```
+```{r}
+dat2 <- data.frame(gene = t(dt[which(rownames(dt) == "HORMAD1"),]),
+                   PAM = coldata$PAM50.Subtype,
+                   PDX = coldata$PDX.line,
+                   Meta = coldata$Tissue)
+```
+
+
+```{r}
+
+ggplot(subset(dat2, PAM == "Basal"), aes(x = Meta, y = log2(1+ HORMAD1 ), group = PDX, color = PDX))+
+  geom_line()+
+  geom_jitter(size = 6,  position = position_jitter(width = 0.1, height = 0.1), shape = 1) + 
+  
+  labs(color = "", labels = "", title = "HORMAD1",
+       y ="TPM (log2)", x = " ")+
+  
+  scale_x_discrete(limits = c("MGT", "Liver", "Lung","Brain"))+
+  scale_shape_manual(values = 0:14)+
+  
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10))
+```
+
+```{r}
+dat3 <- data.frame(gene = t(dt[which(rownames(dt) == "CT83"),]),
+                   PAM = coldata$PAM50.Subtype,
+                   PDX = coldata$PDX.line,
+                   Meta = coldata$Tissue)
+```
+
+
+```{r}
+
+ggplot(subset(dat3, PAM == "Basal"), aes(x = Meta, y = log2(1+ CT83 ), group = PDX, color = PDX))+
+  geom_line()+
+  geom_jitter(size = 6,  position = position_jitter(width = 0.1, height = 0.1), shape = 1) + 
+  
+  labs(color = "", labels = "", title = "CT83",
+       y ="TPM (log2)", x = " ")+
+  
+  scale_x_discrete(limits = c("MGT", "Liver", "Lung","Brain"))+
+  
+  theme_classic()+ 
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 12) ,
+              text=element_text(),
+              axis.text.x=element_text(angle=45, hjust=1,colour="black", size = 10),
+              axis.text.y=element_text(colour="black", size = 10))
+```
+
+
+
+
+
+
+
+
+
+
